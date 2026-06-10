@@ -50,7 +50,7 @@ def registrar_log(email, nome, acao):
         pass
 
 # Interface Lateral
-st.sidebar.image("https://rehagro.com.br/logo.png", use_container_width=True) 
+st.sidebar.image("logorehagro.jpg", use_container_width=True) 
 st.sidebar.title("Menu do Aluno")
 
 # Inicializa sessão

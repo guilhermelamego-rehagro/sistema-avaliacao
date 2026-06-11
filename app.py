@@ -107,13 +107,13 @@ else:
     
     col1, col2, col3 = st.columns(3)
 
-    if col1.button("👥 Pares", use_container_width=True):
+    if col1.button("👥 Avaliação de Pares", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[0]
         st.rerun()
-    if col2.button("📚 Curso", use_container_width=True):
+    if col2.button("📚 Avaliação do Curso", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[1]
         st.rerun()
-    if col3.button("📊 Notas", use_container_width=True):
+    if col3.button("📊 Meus resultados", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[2]
         st.rerun()
 

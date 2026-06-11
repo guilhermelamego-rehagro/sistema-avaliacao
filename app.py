@@ -3,6 +3,7 @@ import gspread
 import pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # 1. Configurações Iniciais da Página
 st.set_page_config(page_title="Portal de Avaliações - Rehagro", page_icon="🎓", layout="centered")
@@ -44,7 +45,7 @@ def ler_aba(nome_aba):
 def registrar_log(email, nome, acao):
     try:
         aba_log = planilha.worksheet("Log_Acessos")
-        agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
         aba_log.append_row([agora, email, nome, acao])
     except:
         pass
@@ -95,7 +96,7 @@ else:
         
     menu = st.sidebar.radio("Selecione um módulo:", ["Avaliação de Pares", "Avaliação do Curso", "Meus Resultados"])
     
-    hoje = pd.to_datetime('today').normalize()
+    hoje = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize()
 
     # ------------------------------------------
     # MÓDULO 1: AVALIAÇÃO DE PARES
@@ -169,7 +170,7 @@ else:
                 with st.spinner("Salvando notas..."):
                     aba_avaliacoes = planilha.worksheet("Avaliacoes")
                     dados_inserir = []
-                    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
                     for email_aval, d in respostas_pares.items():
                         dados_inserir.append([agora, id_ciclo, nome_disc, nome_ciclo, email_aval, d['nome'], meu_grupo, d['nota'], aluno['email'], aluno['nome'], d['coment'], "", ""])
                     aba_avaliacoes.append_rows(dados_inserir)
@@ -252,7 +253,7 @@ else:
             if st.form_submit_button("Enviar Avaliação do Curso", type="primary", use_container_width=True):
                 with st.spinner("Salvando avaliação..."):
                     aba_resp = planilha.worksheet("Respostas_Curso")
-                    agora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
                     linhas = []
                     
                     itens_gerais = [("Auto Estudo", ae), ("Aulas ao Vivo", av), ("Aplicabilidade", ap), ("Suporte", su), 

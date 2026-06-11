@@ -99,7 +99,7 @@ if not st.session_state["aluno_logado"]:
 # ==========================================
 else:
     aluno = st.session_state["aluno_logado"]
-    opcoes_menu = ["Avaliação de Pares", "Avaliação do Curso", "Meus Resultados"]
+    opcoes_menu = ["Avaliação de pares", "Avaliação do curso", "Meus resultados de pares"]
     if "escolha_menu" not in st.session_state:
         st.session_state["escolha_menu"] = opcoes_menu[0]
     st.write(f"### Bem-vindo, {aluno['nome']}!")
@@ -107,13 +107,13 @@ else:
     
     col1, col2, col3 = st.columns(3)
 
-    if col1.button("👥 Avaliação de Pares", use_container_width=True):
+    if col1.button("👥 Avaliação de pares", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[0]
         st.rerun()
-    if col2.button("📚 Avaliação do Curso", use_container_width=True):
+    if col2.button("📚 Avaliação do curso", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[1]
         st.rerun()
-    if col3.button("📊 Meus resultados", use_container_width=True):
+    if col3.button("📊 Meus resultados de pares", use_container_width=True):
         st.session_state["escolha_menu"] = opcoes_menu[2]
         st.rerun()
 

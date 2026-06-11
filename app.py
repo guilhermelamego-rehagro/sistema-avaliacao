@@ -21,6 +21,17 @@ st.markdown("""
     div[data-testid="stSlider"] label, div[data-testid="stSlider"] span {
         color: #004D28 !important;
     }
+
+    /* NOVO: Faz a setinha do menu lateral (celular) ficar verde e pulsar */
+    button[data-testid="stSidebarCollapseButton"] {
+        background-color: #004D28 !important;
+        color: white !important;
+        border-radius: 50% !important;
+        border: 2px solid #B38F36 !important; /* Detalhe em dourado */
+        animation: pulsar 2s infinite !important;
+        width: 40px !important;
+        height: 40px !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -88,14 +99,38 @@ if not st.session_state["aluno_logado"]:
 # ==========================================
 else:
     aluno = st.session_state["aluno_logado"]
-    st.sidebar.success(f"Usuário:\n**{aluno['nome']}**")
+    opcoes_menu = ["Avaliação de Pares", "Avaliação do Curso", "Meus Resultados"]
+    if "escolha_menu" not in st.session_state:
+        st.session_state["escolha_menu"] = opcoes_menu[0]
+    st.write(f"### Bem-vindo, {aluno['nome']}!")
+    st.write("Escolha um módulo abaixo ou use o menu lateral:")
     
-    if st.sidebar.button("Sair"):
-        st.session_state["aluno_logado"] = None
+    col1, col2, col3 = st.columns(3)
+
+    if col1.button("👥 Pares", use_container_width=True):
+        st.session_state["escolha_menu"] = opcoes_menu[0]
         st.rerun()
-        
-    menu = st.sidebar.radio("Selecione um módulo:", ["Avaliação de Pares", "Avaliação do Curso", "Meus Resultados"])
+    if col2.button("📚 Curso", use_container_width=True):
+        st.session_state["escolha_menu"] = opcoes_menu[1]
+        st.rerun()
+    if col3.button("📊 Notas", use_container_width=True):
+        st.session_state["escolha_menu"] = opcoes_menu[2]
+        st.rerun()
+
+    st.write("---")
+
+    indice_atual = opcoes_menu.index(st.session_state["escolha_menu"])
     
+    menu = st.sidebar.radio(
+        "Selecione um módulo:", 
+        opcoes_menu, 
+        index=indice_atual,
+        key="radio_lateral"
+    )
+    if menu != st.session_state["escolha_menu"]:
+        st.session_state["escolha_menu"] = menu
+        st.rerun()
+            
     hoje = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
 
     # ------------------------------------------

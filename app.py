@@ -81,7 +81,7 @@ if not st.session_state["aluno_logado"]:
 
         botao_acessar = st.form_submit_button("Acessar Portal", type="primary")
     
-   if botao_acessar:
+    if botao_acessar:
         if email_input:
             email_formatado = email_input.strip().lower()
             

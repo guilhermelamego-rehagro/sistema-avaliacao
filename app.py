@@ -96,7 +96,7 @@ else:
         
     menu = st.sidebar.radio("Selecione um módulo:", ["Avaliação de Pares", "Avaliação do Curso", "Meus Resultados"])
     
-    hoje = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize()
+    hoje = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
 
     # ------------------------------------------
     # MÓDULO 1: AVALIAÇÃO DE PARES

@@ -31,7 +31,7 @@ def conectar_planilha():
 
     credenciais = ServiceAccountCredentials.from_json_keyfile_dict(info_credenciais, escopo)
     cliente = gspread.authorize(credenciais)
-    return cliente.open("Cópia de Sistema_Avaliacao_Pares")
+    return cliente.open_by_key("1miHasJXm7Gs5GwQxP0T2w6kbUipnesXSV90taXVbqtg")
 
 # Conecta ao banco de dados (Variável Global)
 planilha = conectar_planilha()

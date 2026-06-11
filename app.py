@@ -100,6 +100,9 @@ if not st.session_state["aluno_logado"]:
 else:
     aluno = st.session_state["aluno_logado"]
     opcoes_menu = ["Avaliação de pares", "Avaliação do curso", "Meus resultados de pares"]
+    if "radio_lateral" not in st.session_state:
+        st.session_state["radio_lateral"] = opcoes_menu[0]
+        
     if "escolha_menu" not in st.session_state:
         st.session_state["escolha_menu"] = opcoes_menu[0]
     st.write(f"### Bem-vindo, {aluno['nome']}!")
@@ -108,12 +111,15 @@ else:
     col1, col2, col3 = st.columns(3)
 
     if col1.button("👥 Avaliação de pares", use_container_width=True):
+        st.session_state["radio_lateral"] = opcoes_menu[0]
         st.session_state["escolha_menu"] = opcoes_menu[0]
         st.rerun()
     if col2.button("📚 Avaliação do curso", use_container_width=True):
+        st.session_state["radio_lateral"] = opcoes_menu[1]
         st.session_state["escolha_menu"] = opcoes_menu[1]
         st.rerun()
     if col3.button("📊 Meus resultados de pares", use_container_width=True):
+        st.session_state["radio_lateral"] = opcoes_menu[2]
         st.session_state["escolha_menu"] = opcoes_menu[2]
         st.rerun()
 
@@ -124,7 +130,6 @@ else:
     menu = st.sidebar.radio(
         "Selecione um módulo:", 
         opcoes_menu, 
-        index=indice_atual,
         key="radio_lateral"
     )
     if menu != st.session_state["escolha_menu"]:

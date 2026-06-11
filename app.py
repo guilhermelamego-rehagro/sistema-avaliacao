@@ -75,9 +75,13 @@ if "aluno_logado" not in st.session_state:
 if not st.session_state["aluno_logado"]:
     st.title("Bem-vindo ao Portal de Avaliações")
     st.write("Digite seu e-mail cadastrado para acessar seus módulos.")
-    email_input = st.text_input("E-mail Rehagro:")
+
+    with st.form("formulario_login", clear_on_submit=False):
+        email_input = st.text_input("E-mail Rehagro:")
+
+        botao_acessar = st.form_submit_button("Acessar Portal", type="primary")
     
-    if st.button("Acessar Portal", type="primary"):
+   if botao_acessar:
         if email_input:
             email_formatado = email_input.strip().lower()
             

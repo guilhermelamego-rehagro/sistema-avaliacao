@@ -136,8 +136,8 @@ else:
     # ------------------------------------------
     # MÓDULO 1: AVALIAÇÃO DE PARES
     # ------------------------------------------
-    if menu == "Avaliação de Pares":
-        st.header("👥 Avaliação de Pares")
+    if menu == "Avaliação de pares":
+        st.header("👥 Avaliação de pares")
         
         # Puxa os dados (agora é instantâneo por causa do cache)
         df_disc = ler_aba("Disciplinas")
@@ -219,8 +219,8 @@ else:
     # ------------------------------------------
     # MÓDULO 2: AVALIAÇÃO DO CURSO
     # ------------------------------------------
-    elif menu == "Avaliação do Curso":
-        st.header("📚 Avaliação do Curso")
+    elif menu == "Avaliação do curso":
+        st.header("📚 Avaliação do curso")
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
@@ -310,8 +310,8 @@ else:
     # ------------------------------------------
     # MÓDULO 3: MEUS RESULTADOS (BOLETIM)
     # ------------------------------------------
-    elif menu == "Meus Resultados":
-        st.header("📊 Meus Resultados")
+    elif menu == "Meus resultados de pares":
+        st.header("📊 Meus resultados de pares")
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")

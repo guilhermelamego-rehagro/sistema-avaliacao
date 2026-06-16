@@ -38,7 +38,7 @@ def conectar_planilha():
     info_credenciais = st.secrets["gcp_service_account"]
     credenciais = ServiceAccountCredentials.from_json_keyfile_dict(info_credenciais, escopo)
     cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(st.secrets["planilhas"]["id_teste"])
+    return cliente.open_by_key(st.secrets["planilhas"]["id_producao"])
 
 # Conecta ao banco de dados (Variável Global)
 planilha = conectar_planilha()

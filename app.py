@@ -38,7 +38,7 @@ def conectar_planilha():
     info_credenciais = st.secrets["gcp_service_account"]
     credenciais = ServiceAccountCredentials.from_json_keyfile_dict(info_credenciais, escopo)
     cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(st.secrets["planilhas"]["id_producao"])
+    return cliente.open_by_key(st.secrets["planilhas"]["id_teste"])
 
 # Conecta ao banco de dados (Variável Global)
 planilha = conectar_planilha()
@@ -167,24 +167,19 @@ else:
     col1, col2, col3 = st.columns(3)
     if perfil == "Professor":
         if col1.button("👨‍🏫 Painel Geral", use_container_width=True):
-            st.session_state["radio_lateral"] = "Painel Geral"
             st.session_state["escolha_menu"] = "Painel Geral"
             st.rerun()
         if col2.button("🚫 Moderar Comentários", use_container_width=True):
-            st.session_state["radio_lateral"] = "Moderação de Comentários"
             st.session_state["escolha_menu"] = "Moderação de Comentários"
             st.rerun()
     else:
         if col1.button("👥 Avaliação de pares", use_container_width=True):
-            st.session_state["radio_lateral"] = "Avaliação de pares"
             st.session_state["escolha_menu"] = "Avaliação de pares"
             st.rerun()
         if col2.button("📚 Avaliação do curso", use_container_width=True):
-            st.session_state["radio_lateral"] = "Avaliação do curso"
             st.session_state["escolha_menu"] = "Avaliação do curso"
             st.rerun()
         if col3.button("📊 Meus resultados de pares", use_container_width=True):
-            st.session_state["radio_lateral"] = "Meus resultados de pares"
             st.session_state["escolha_menu"] = "Meus resultados de pares"
             st.rerun()
 
@@ -193,7 +188,7 @@ else:
     menu = st.sidebar.radio(
         "Selecione um módulo:", 
         opcoes_menu, 
-        key="radio_lateral"
+        index=opcoes_menu.index(st.session_state["escolha_menu"])
     )
     if menu != st.session_state["escolha_menu"]:
         st.session_state["escolha_menu"] = menu
@@ -282,14 +277,19 @@ else:
                         registrar_log(aluno['email'], aluno['nome'], f"Enviou avaliação pares - {nome_ciclo}")
                         
                         ler_aba.clear() 
-                        st.success("✅ Avaliações salvas com sucesso!")
+                        st.session_state["escolha_menu"] = "Avaliação do curso"
+                        st.session_state["sucesso_redirecionamento"] = f"✅ Suas avaliações de pares para o **{nome_ciclo}** foram salvas! Por favor, responda agora à Avaliação do Curso abaixo."
                         st.rerun()
 
     # ------------------------------------------
     # MÓDULO 2: AVALIAÇÃO DO CURSO
     # ------------------------------------------
     elif menu == "Avaliação do curso" and perfil == "Aluno":
+        st.markdown("<div style='position:relative'><input type='text' autofocus style='opacity:0; position:absolute; top:0; left:0; height:1px; width:1px;'></div>", unsafe_allow_html=True)
         st.header("📚 Avaliação do curso")
+        if "sucesso_redirecionamento" in st.session_state:
+            st.success(st.session_state["sucesso_redirecionamento"])
+            del st.session_state["sucesso_redirecionamento"]
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
@@ -421,48 +421,81 @@ else:
             st.warning("Nenhum ciclo cadastrado.")
             st.stop()
             
-        abas = st.tabs(ciclos_disc['Nome_Ciclo'].tolist())
+        # ---------------------------------------------------------
+        # INTELIGÊNCIA DE SELEÇÃO DO CICLO PADRÃO
+        # ---------------------------------------------------------
+        lista_nomes_ciclos = ciclos_disc['Nome_Ciclo'].tolist()
         
-        for i, row_ciclo in ciclos_disc.reset_index().iterrows():
-            with abas[i]:
-                cid = str(row_ciclo['ID_Ciclo']).strip()
-                cnome = str(row_ciclo['Nome_Ciclo']).strip()
+        # 1. Padrão de segurança: se nada for achado, seleciona o último ciclo cronológico
+        idx_padrao_boletim = len(lista_nomes_ciclos) - 1 if lista_nomes_ciclos else 0
+        
+        # 2. Critério A: Verificar se existe algum ciclo ativo hoje por data ou status
+        ciclo_hoje = ciclos_disc[(ciclos_disc['Status'].str.lower() == 'ativo') | 
+                                 ((hoje >= ciclos_disc['Data início']) & (hoje <= ciclos_disc['Data fim']))]
+        
+        if not ciclo_hoje.empty:
+            nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
+            if nome_ativo_hoje in lista_nomes_ciclos:
+                idx_padrao_boletim = lista_nomes_ciclos.index(nome_ativo_hoje)
+        else:
+            # 3. Critério B: Se nenhum está ativo hoje, busca o último ciclo cronológico que de fato possui avaliações recebidas para este aluno
+            recebidas_todas = df_aval[df_aval['Email_Avaliado'].str.lower().str.strip() == aluno['email']]
+            if not recebidas_todas.empty:
+                ids_com_nota = recebidas_todas['ID_Ciclo'].astype(str).str.strip().unique()
+                ciclos_com_nota = ciclos_disc[ciclos_disc['ID_Ciclo'].astype(str).str.strip().isin(ids_com_nota)]
+                if not ciclos_com_nota.empty:
+                    ultimo_ciclo_com_nota = ciclos_com_nota.iloc[-1]['Nome_Ciclo']
+                    if ultimo_ciclo_com_nota in lista_nomes_ciclos:
+                        idx_padrao_boletim = lista_nomes_ciclos.index(ultimo_ciclo_com_nota)
+
+        # Criamos o seletor com o index calculado de forma inteligente
+        ciclo_boletim_sel = st.selectbox("Selecione o Ciclo para visualizar as notas:", lista_nomes_ciclos, index=idx_padrao_boletim)
+        
+        # Resgatamos a linha correspondente ao ciclo escolhido pelo usuário
+        row_ciclo = ciclos_disc[ciclos_disc['Nome_Ciclo'] == ciclo_boletim_sel].iloc[0]
+        
+        # ---------------------------------------------------------
+        # RENDERIZAÇÃO DOS RESULTADOS DO CICLO SELECIONADO
+        # ---------------------------------------------------------
+        st.markdown(f"### 📋 Detalhes do {ciclo_boletim_sel}")
+        cid = str(row_ciclo['ID_Ciclo']).strip()
+        cnome = str(row_ciclo['Nome_Ciclo']).strip()
+        
+        notas_ciclo = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip() == cid]
+        realizou = not notas_ciclo[notas_ciclo['Email_Avaliador'].str.lower().str.strip() == aluno['email']].empty
+        multiplicador = 2 if realizou else 1
+        
+        recebidas = notas_ciclo[notas_ciclo['Email_Avaliado'].str.lower().str.strip() == aluno['email']]
+        
+        if recebidas.empty:
+            st.write("⏳ Os resultados para este ciclo ainda não foram processados ou você não recebeu avaliações.")
+        else:
+            notas_numericas = pd.to_numeric(recebidas['Nota'], errors='coerce').dropna()
+            media = notas_numericas.mean() if not notas_numericas.empty else 0
+            nota_final = media * multiplicador
+            
+            c1, c2 = st.columns(2)
+            c1.metric("Média dos Pares", f"{media:.1f}")
+            c2.metric("Nota Final Recebida", f"{nota_final:.1f}", f"Multiplicador x{multiplicador}")
+            
+            if realizou:
+                st.success("✅ Você realizou a avaliação dos seus colegas. Sua média foi multiplicada por 2.")
+            else:
+                st.error("❌ Você não enviou sua avaliação de pares. Sua nota sofreu penalidade (Multiplicador x1).")
                 
-                notas_ciclo = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip() == cid]
-                realizou = not notas_ciclo[notas_ciclo['Email_Avaliador'].str.lower().str.strip() == aluno['email']].empty
-                multiplicador = 2 if realizou else 1
-                
-                recebidas = notas_ciclo[notas_ciclo['Email_Avaliado'].str.lower().str.strip() == aluno['email']]
-                
-                if recebidas.empty:
-                    st.write("⏳ Os resultados para este ciclo ainda não foram processados ou você não recebeu avaliações.")
-                else:
-                    notas_numericas = pd.to_numeric(recebidas['Nota'], errors='coerce').dropna()
-                    media = notas_numericas.mean() if not notas_numericas.empty else 0
-                    nota_final = media * multiplicador
-                    
-                    c1, c2 = st.columns(2)
-                    c1.metric("Média dos Pares", f"{media:.1f}")
-                    c2.metric("Nota Final Recebida", f"{nota_final:.1f}", f"Multiplicador x{multiplicador}")
-                    
-                    if realizou:
-                        st.success("✅ Você realizou a avaliação dos seus colegas. Sua média foi multiplicada por 2.")
-                    else:
-                        st.error("❌ Você não enviou sua avaliação de pares. Sua nota sofreu penalidade (Multiplicador x1).")
-                        
-                    st.write("---")
-                    st.write("**Feedbacks Recebidos no Ciclo:**")
-                    if 'Moderação' in recebidas.columns:
-                        recebidas = recebidas[recebidas['Moderação'].str.lower().str.strip() != 'ignorar']
-                        
-                    comentarios = recebidas['Comentário'].dropna().astype(str)
-                    comentarios = comentarios[comentarios.str.strip() != ""]
-                    
-                    if comentarios.empty:
-                        st.write("*Nenhum feedback em texto registrado para você neste ciclo.*")
-                    else:
-                        for c in comentarios:
-                            st.info(f'"{c}"')
+            st.write("---")
+            st.write("**Feedbacks Recebidos no Ciclo:**")
+            if 'Moderação' in recebidas.columns:
+                recebidas = recebidas[recebidas['Moderação'].str.lower().str.strip() != 'ignorar']
+            
+            comentarios = recebidas['Comentário'].dropna().astype(str)
+            comentarios = comentarios[comentarios.str.strip() != ""]
+            
+            if comentarios.empty:
+                st.write("*Nenhum feedback em texto registrado para você neste ciclo.*")
+            else:
+                for c in comentarios:
+                    st.info(f'"{c}"')
 
     # ------------------------------------------
     # MÓDULO DO PROFESSOR: PAINEL GERAL
@@ -484,7 +517,6 @@ else:
         if not df_ativa.empty:
             disc_ativa_nome = df_ativa.iloc[0]['Nome_Disciplina']
             if disc_ativa_nome in lista_disciplinas:
-                # Descobre em qual posição da lista a disciplina ativa está
                 idx_padrao_disc = lista_disciplinas.index(disc_ativa_nome)
 
         disc_sel = st.selectbox("Selecione a Disciplina:", lista_disciplinas, index=idx_padrao_disc, key="geral_disc_sel")
@@ -496,16 +528,56 @@ else:
             st.warning("Nenhum ciclo cadastrado para esta disciplina.")
             st.stop()
             
-        ciclo_sel = st.selectbox("Selecione o Ciclo:", lista_ciclos)
-        id_ciclo_sel = str(ciclos_filtrados[ciclos_filtrados['Nome_Ciclo'] == ciclo_sel].iloc[0]['ID_Ciclo']).strip()
+        # ---------------------------------------------------------
+        # SUPORTE AO FILTRO "TODOS" + SELEÇÃO SE INICIANDO NO CICLO ATUAL
+        # ---------------------------------------------------------
+        opcoes_ciclos = ["Todos"] + lista_ciclos
+        idx_padrao_ciclo = 0 # Fallback caso falte dados
         
+        try:
+            # Pega o dia de hoje sem fuso horário para bater com o padrão gravado
+            hoje_atual = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
+            df_ciclos_copy = ciclos_filtrados.copy()
+            
+            df_ciclos_copy['Data início'] = pd.to_datetime(df_ciclos_copy['Data início'], format='%d/%m/%Y', errors='coerce')
+            df_ciclos_copy['Data fim'] = pd.to_datetime(df_ciclos_copy['Data fim'], format='%d/%m/%Y', errors='coerce')
+            
+            cond_status = df_ciclos_copy['Status'].astype(str).str.lower().str.strip() == 'ativo'
+            cond_data = ((hoje_atual >= df_ciclos_copy['Data início']) & (hoje_atual <= df_ciclos_copy['Data fim']))
+            
+            ciclo_hoje = df_ciclos_copy[cond_status | cond_data]
+            if not ciclo_hoje.empty:
+                nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
+                if nome_ativo_hoje in lista_ciclos:
+                    idx_padrao_ciclo = opcoes_ciclos.index(nome_ativo_hoje)
+            else:
+                if lista_ciclos:
+                    # Se não há ciclo explícito hoje, pré-seleciona o último ciclo da lista
+                    idx_padrao_ciclo = len(opcoes_ciclos) - 1
+        except Exception:
+            idx_padrao_ciclo = 0
+            
+        ciclo_sel = st.selectbox("Selecione o Ciclo:", opcoes_ciclos, index=idx_padrao_ciclo, key="geral_ciclo_sel")
+        
+        # Mapeamento do escopo de IDs de ciclos alvos baseados na seleção
+        if ciclo_sel == "Todos":
+            ids_ciclo_alvo = ciclos_filtrados['ID_Ciclo'].astype(str).str.strip().tolist()
+            ciclos_alvo = ciclos_filtrados.copy()
+        else:
+            ids_ciclo_alvo = [str(ciclos_filtrados[ciclos_filtrados['Nome_Ciclo'] == ciclo_sel].iloc[0]['ID_Ciclo']).strip()]
+            ciclos_alvo = ciclos_filtrados[ciclos_filtrados['Nome_Ciclo'] == ciclo_sel]
+        
+        # ---------------------------------------------------------
+        # FILTROS ADICIONAIS (SALA, GRUPO, NOME)
+        # ---------------------------------------------------------
         entrancia_disc = df_entrancia[df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
         sala_sel = st.selectbox("Selecione a Sala:", ["Todas"] + sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist()))
+        
         def chave_ordenacao_geral(x):
             try:
-                return (0, float(x)) # Se for número (ex: 1, 2, 10), ordena numericamente
+                return (0, float(x)) 
             except ValueError:
-                return (1, str(x))   # Se for texto (ex: 'A'), joga pro final e ordena alfabeticamente
+                return (1, str(x))   
 
         lista_grupos_geral = sorted(entrancia_disc['Grupo'].dropna().unique().astype(str).tolist(), key=chave_ordenacao_geral)
         grupo_sel = st.selectbox("Selecione o Grupo/Turma:", ["Todos"] + lista_grupos_geral)
@@ -521,32 +593,55 @@ else:
             
         aba_pendentes, aba_resultados = st.tabs(["⏳ Alunos Pendentes", "📊 Prévia de Resultados"])
         
+        # ---------------------------------------------------------
+        # ABA PENDENTES (Retirada a coluna E-mail)
+        # ---------------------------------------------------------
         with aba_pendentes:
             st.subheader("Alunos que ainda não enviaram a avaliação")
-            ja_votaram = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip() == id_ciclo_sel]['Email_Avaliador'].str.lower().str.strip().unique().tolist()
-            df_pendentes = df_alunos_esperados[~df_alunos_esperados['Email_Pessoal'].str.lower().str.strip().isin(ja_votaram)]
+            
+            df_pendentes_list = []
+            for _, c_row in ciclos_alvo.iterrows():
+                cid = str(c_row['ID_Ciclo']).strip()
+                cnome = str(c_row['Nome_Ciclo']).strip()
+                
+                ja_votaram = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip() == cid]['Email_Avaliador'].str.lower().str.strip().unique().tolist()
+                df_p = df_alunos_esperados[~df_alunos_esperados['Email_Pessoal'].str.lower().str.strip().isin(ja_votaram)].copy()
+                df_p['Ciclo'] = cnome
+                df_pendentes_list.append(df_p)
+                
+            if df_pendentes_list:
+                df_pendentes = pd.concat(df_pendentes_list, ignore_index=True)
+            else:
+                df_pendentes = pd.DataFrame()
             
             if df_pendentes.empty:
                 st.success("🎉 Nenhum aluno pendente para os filtros selecionados!")
             else:
-                rel_pendentes = df_pendentes[['Nome_Completo', 'Email_Pessoal', 'Sala', 'Grupo']].rename(columns={'Nome_Completo': 'Nome', 'Email_Pessoal': 'E-mail'})
+                # REQUISITO 1: Removido 'Email_Pessoal' do dataframe visual exposto na tela
+                rel_pendentes = df_pendentes[['Nome_Completo', 'Ciclo', 'Sala', 'Grupo']].rename(columns={'Nome_Completo': 'Nome'})
                 st.write(f"Total pendente: **{len(rel_pendentes)}**")
                 st.dataframe(rel_pendentes, use_container_width=True)
                 
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    rel_pendentes.to_excel(writer, index=False, sheet_name='Pendentes')
+                    # Mantemos o e-mail no Excel baixado para controle de envio/cobrança do professor
+                    df_pendentes[['Nome_Completo', 'Email_Pessoal', 'Ciclo', 'Sala', 'Grupo']].to_excel(writer, index=False, sheet_name='Pendentes')
                 st.download_button("📥 Baixar Lista de Pendentes (Excel)", data=buffer.getvalue(), file_name=f"pendentes_{ciclo_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
+        # ---------------------------------------------------------
+        # ABA RESULTADOS (Utilizando a coluna nativa 'Ciclo')
+        # ---------------------------------------------------------
         with aba_resultados:
             st.subheader("Médias parciais calculadas para os alunos")
-            votos_ciclo = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip() == id_ciclo_sel]
+            votos_ciclo = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip().isin(ids_ciclo_alvo)].copy()
             
             if votos_ciclo.empty:
-                st.info("Nenhum voto registrado para este ciclo.")
+                st.info("Nenhum voto registrado para os critérios selecionados.")
             else:
                 votos_ciclo['Nota'] = pd.to_numeric(votos_ciclo['Nota'], errors='coerce')
-                df_medias = votos_ciclo.groupby('Email_Avaliado').agg(
+                
+                # Agrupamento dinâmico que funciona tanto para um ciclo individual quanto para "Todos"
+                df_medias = votos_ciclo.groupby(['Email_Avaliado', 'Ciclo']).agg(
                     Nome=('Nome_Avaliado', 'first'),
                     Grupo=('Grupo', 'first'),
                     Media_Pares=('Nota', 'mean'),
@@ -559,39 +654,34 @@ else:
                     st.warning("Nenhum resultado para os filtros aplicados.")
                 else:
                     df_res_filtrados['Media_Pares'] = df_res_filtrados['Media_Pares'].round(1)
-                    rel_resultados = df_res_filtrados[['Nome', 'Email_Avaliado', 'Grupo', 'Media_Pares', 'Votos_Recebidos']].sort_values('Nome')
+                    
+                    # Exibição visual limpa ordenada por ciclo e nome do aluno
+                    rel_resultados = df_res_filtrados[['Nome', 'Ciclo', 'Grupo', 'Media_Pares', 'Votos_Recebidos']].sort_values(['Ciclo', 'Nome'])
                     st.dataframe(rel_resultados, use_container_width=True)
                     
                     buffer_res = io.BytesIO()
                     with pd.ExcelWriter(buffer_res, engine='openpyxl') as writer:
-                        rel_resultados.to_excel(writer, index=False, sheet_name='Resultados')
+                        df_res_filtrados[['Nome', 'Email_Avaliado', 'Ciclo', 'Grupo', 'Media_Pares', 'Votos_Recebidos']].to_excel(writer, index=False, sheet_name='Resultados')
                     st.download_button("📥 Baixar Resultados Parciais (Excel)", data=buffer_res.getvalue(), file_name=f"resultados_{ciclo_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    # ------------------------------------------
-    # MÓDULO DO PROFESSOR: MODERAÇÃO DE COMENTÁRIOS (DESIGN CARDS + BUGFIX)
-    # ------------------------------------------
+                    
+    # =========================================================
+    # MÓDULO DO PROFESSOR: MODERAÇÃO DE COMENTÁRIOS
+    # =========================================================
     elif menu == "Moderação de Comentários" and perfil == "Professor":
         st.header("🎯 Painel de Moderação do Orientador")
         st.write("Por padrão, todos os feedbacks nascem **Aprovados** e visíveis aos alunos. Use as ações abaixo para ocultar (Ignorar) ou reativar comentários.")
         
-        # Carrega todas as bases necessárias para os filtros em cascata
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
         df_turmas = ler_aba("Entrancia_Turma")
         df_aval = ler_aba("Avaliacoes")
         
-        # Cria explicitamente o mapeamento da linha real do gspread ANTES de qualquer filtro ou merge
-        # O gspread é indexado em 1 e tem o cabeçalho, então a linha real é index + 2
         df_aval['Linha_Planilha'] = df_aval.index + 2
 
-        # ---------------------------------------------------------
-        # LÓGICA DE SELEÇÃO AUTOMÁTICA DA DISCIPLINA ATIVA
-        # ---------------------------------------------------------
         lista_disciplinas = df_disc['Nome_Disciplina'].unique().tolist()
         idx_padrao_disc = 0 
         
-        # AJUSTE AQUI: Se na sua planilha a coluna chamar 'Status', 'Ativa', etc.
-        coluna_status = 'Status' if 'Status' in df_disc.columns else df_disc.columns[-1] # fallback para a última coluna caso mude o nome
+        coluna_status = 'Status' if 'Status' in df_disc.columns else df_disc.columns[-1]
         
         df_ativa = df_disc[df_disc[coluna_status].astype(str).str.strip().str.lower().isin(['ativa', 'ativo', 'sim', 's'])]
         if not df_ativa.empty:
@@ -599,9 +689,6 @@ else:
             if disc_ativa_nome in lista_disciplinas:
                 idx_padrao_disc = lista_disciplinas.index(disc_ativa_nome)
         
-        # ---------------------------------------------------------
-        # FILTROS EM CASCATA (Disciplina -> Ciclo -> Sala -> Grupo)
-        # ---------------------------------------------------------
         st.markdown("### 🔍 Filtros de Seleção")
         c_filt1, c_filt2 = st.columns(2)
         
@@ -617,9 +704,37 @@ else:
                 st.warning("Nenhum ciclo cadastrado para esta disciplina.")
                 st.stop()
                 
-            ciclo_sel = st.selectbox("Selecione o Ciclo:", lista_ciclos, key="mod_ciclo_sel")
-            id_ciclo_sel = str(ciclos_filtrados[ciclos_filtrados['Nome_Ciclo'] == ciclo_sel].iloc[0]['ID_Ciclo']).strip()
+            opcoes_ciclos_mod = ["Todos"] + lista_ciclos
+            idx_padrao_ciclo_mod = 0
             
+            try:
+                hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
+                df_ciclos_copy = ciclos_filtrados.copy()
+                for col in ['Data início', 'Data fim']:
+                    if col in df_ciclos_copy.columns:
+                        df_ciclos_copy[col] = pd.to_datetime(df_ciclos_copy[col], errors='coerce').dt.date
+                
+                cond_status = df_ciclos_copy['Status'].astype(str).str.lower().str.strip() == 'ativo' if 'Status' in df_ciclos_copy.columns else False
+                cond_data = ((hoje >= df_ciclos_copy['Data início']) & (hoje <= df_ciclos_copy['Data fim'])) if ('Data início' in df_ciclos_copy.columns and 'Data fim' in df_ciclos_copy.columns) else False
+                
+                ciclo_hoje = df_ciclos_copy[cond_status | cond_data]
+                if not ciclo_hoje.empty:
+                    nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
+                    if nome_ativo_hoje in lista_ciclos:
+                        idx_padrao_ciclo_mod = opcoes_ciclos_mod.index(nome_ativo_hoje)
+                else:
+                    if lista_ciclos:
+                        idx_padrao_ciclo_mod = len(opcoes_ciclos_mod) - 1
+            except Exception:
+                idx_padrao_ciclo_mod = 0
+                
+            ciclo_sel = st.selectbox("Selecione o Ciclo:", opcoes_ciclos_mod, index=idx_padrao_ciclo_mod, key="mod_ciclo_sel")
+            
+            if ciclo_sel == "Todos":
+                ids_ciclo_alvo = ciclos_filtrados['ID_Ciclo'].astype(str).str.strip().tolist()
+            else:
+                ids_ciclo_alvo = [str(ciclos_filtrados[ciclos_filtrados['Nome_Ciclo'] == ciclo_sel].iloc[0]['ID_Ciclo']).strip()]
+        
         c_filt3, c_filt4 = st.columns(2)
         
         with c_filt3:
@@ -628,75 +743,80 @@ else:
             sala_sel = st.selectbox("Filtrar por Sala:", salas_disponiveis, key="mod_sala_sel")
             
         with c_filt4:
-            # Converte para numérico onde for possível para ordenar corretamente, mantendo texto se houver
             def chave_ordenacao_grupo(x):
                 try:
-                    return (0, float(x))  # Se for número, ordena numericamente
+                    return (0, float(x))
                 except ValueError:
-                    return (1, str(x))    # Se for texto (ex: "A"), joga para o final e ordena alfabeticamente
+                    return (1, str(x))
 
             lista_grupos_ordenada = sorted(entrancia_disc['Grupo'].dropna().unique().astype(str).tolist(), key=chave_ordenacao_grupo)
             grupos_disponiveis = ["Todos"] + lista_grupos_ordenada
             grupo_sel = st.selectbox("Filtrar por Grupo:", grupos_disponiveis, key="mod_grupo_sel")
 
+        nome_busca_mod = st.text_input("🔍 Buscar Feedback por Nome do Aluno (Avaliador ou Avaliado):", key="mod_nome_busca")
+
         # ---------------------------------------------------------
-        # FILTRAGEM E PROCESSAMENTO DOS COMENTÁRIOS
+        # FILTRAGEM DOS COMENTÁRIOS (BUGFIX DO NOME DO CICLO ADICIONADO AQUI)
         # ---------------------------------------------------------
         df_comentarios = df_aval[
-            (df_aval['ID_Ciclo'].astype(str).str.strip() == id_ciclo_sel) & 
+            (df_aval['ID_Ciclo'].astype(str).str.strip().isin(ids_ciclo_alvo)) & 
             (df_aval['Comentário'].astype(str).str.strip() != "")
         ].copy()
         
         if df_comentarios.empty:
-            st.info(f"Nenhum comentário registrado para o ciclo '{ciclo_sel}'.")
+            st.info("Nenhum comentário registrado para a seleção realizada.")
         else:
-            # Cruza com a Entrancia_Turma para descobrir a Sala e Grupo de cada aluno avaliado
+            # BUGFIX: Cruza com os ciclos para obter o 'Nome_Ciclo' antes do mapeamento visual
+            df_ciclos_nomes = df_ciclos[['ID_Ciclo', 'Nome_Ciclo']].drop_duplicates().copy()
+            df_ciclos_nomes['ID_Ciclo'] = df_ciclos_nomes['ID_Ciclo'].astype(str).str.strip()
+            df_comentarios['ID_Ciclo'] = df_comentarios['ID_Ciclo'].astype(str).str.strip()
+            df_comentarios = pd.merge(df_comentarios, df_ciclos_nomes, on='ID_Ciclo', how='left')
+
             df_turmas_mapping = entrancia_disc[['Email_Pessoal', 'Sala', 'Grupo']].drop_duplicates().rename(columns={'Email_Pessoal': 'Email_Avaliado'})
             
-            # Remove colunas duplicadas se já existirem antes do merge para evitar sufixos _x ou _y
             if 'Sala' in df_comentarios.columns: df_comentarios.drop(columns=['Sala'], inplace=True)
             if 'Grupo' in df_comentarios.columns: df_comentarios.drop(columns=['Grupo'], inplace=True)
                 
             df_comentarios = pd.merge(df_comentarios, df_turmas_mapping, on='Email_Avaliado', how='left')
             
-            # Aplica os filtros de Sala e Grupo na listagem
             if sala_sel != "Todas":
                 df_comentarios = df_comentarios[df_comentarios['Sala'].astype(str).str.strip() == sala_sel]
             if grupo_sel != "Todos":
                 df_comentarios = df_comentarios[df_comentarios['Grupo'].astype(str).str.strip() == grupo_sel]
                 
+            if nome_busca_mod:
+                cond_nome_reg = df_comentarios['Nome'].astype(str).str.contains(nome_busca_mod, case=False, na=False) if 'Nome' in df_comentarios.columns else False
+                cond_aval_real = df_comentarios['Nome_Avaliador'].astype(str).str.contains(nome_busca_mod, case=False, na=False) if 'Nome_Avaliador' in df_comentarios.columns else False
+                cond_avaliado = df_comentarios['Nome_Avaliado'].astype(str).str.contains(nome_busca_mod, case=False, na=False) if 'Nome_Avaliado' in df_comentarios.columns else False
+                df_comentarios = df_comentarios[cond_nome_reg | cond_aval_real | cond_avaliado]
+
             # ---------------------------------------------------------
-            # EXIBIÇÃO EM FORMATO DE CARDS (BLOCO INTEGRAL)
+            # EXIBIÇÃO EM FORMATO DE CARDS
             # ---------------------------------------------------------
             st.markdown("### 💬 Lista de Feedbacks Encontrados")
             st.write(f"Total nesta seleção: **{len(df_comentarios)}**")
             st.markdown("---")
             
             if df_comentarios.empty:
-                st.warning("Nenhum comentário corresponde aos filtros de Sala/Grupo aplicados.")
+                st.warning("Nenhum comentário corresponde aos filtros aplicados.")
             else:
                 for idx, row in df_comentarios.iterrows():
-                    # Identifica a linha real salva para não errar a edição no gspread
                     linha_real_gspread = int(row['Linha_Planilha'])
-                    
                     status_atual = str(row.get('Moderação', '')).strip().lower()
                     is_ignorado = (status_atual == 'ignorar')
                     
-                    # Definição de metadados do Card
                     sala_card = str(row.get('Sala', '-'))
                     grupo_card = str(row.get('Grupo', '-'))
+                    ciclo_card = str(row.get('Nome_Ciclo', '-')) # Agora vai capturar corretamente ex: "Ciclo 1"
                     avaliador = str(row.get('Nome', row.get('Nome_Avaliador', 'Avaliador')))
                     avaliado = str(row.get('Nome_Avaliado', 'Avaliado'))
                     comentario_texto = str(row.get('Comentário', ''))
                     
-                    # Container visual para cada feedback
                     with st.container():
-                        # Divisão interna do card: Corpo do texto (80%) | Status e Ação (20%)
                         col_corpo, col_acao = st.columns([4, 1])
                         
                         with col_corpo:
-                            # Tag superior estilizada com os dados do aluno
-                            st.markdown(f"**Sala {sala_card} • Grupo {grupo_card}** | `{avaliador}` ➔ `{avaliado}`")
+                            st.markdown(f"**{ciclo_card} • Sala {sala_card} • Grupo {grupo_card}** | `{avaliador}` ➔ `{avaliado}`")
                             st.markdown(f"➔ *\"{comentario_texto}\"*")
                         
                         with col_acao:
@@ -705,7 +825,6 @@ else:
                                 if st.button("🔄 Aprovar", key=f"btn_aprov_{linha_real_gspread}", use_container_width=True):
                                     with st.spinner("Atualizando..."):
                                         aba_real = planilha.worksheet("Avaliacoes")
-                                        # Coluna 13 é a coluna 'Moderação'
                                         aba_real.update_cell(linha_real_gspread, 13, "Aprovado")
                                         ler_aba.clear()
                                         st.toast("Status alterado para Aprovado!")

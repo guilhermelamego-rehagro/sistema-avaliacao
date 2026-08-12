@@ -92,14 +92,26 @@ def _kwargs_get_all_records_frequencia(colunas_config: list[str] | None) -> dict
     return kwargs
 
 
+def _ambiente_planilha() -> str:
+    """Lê ambiente na raiz ou aninhado por engano em planilhas/gcp."""
+    valor = st.secrets.get("ambiente")
+    if valor is None:
+        valor = st.secrets.get("planilhas", {}).get("ambiente")
+    if valor is None:
+        valor = st.secrets.get("gcp_service_account", {}).get("ambiente")
+    ambiente = str(valor or "teste").strip().lower()
+    if ambiente in {"producao", "produção", "production", "prod"}:
+        return "producao"
+    return "teste"
+
+
 @st.cache_resource(ttl=600)
 def conectar_planilha():
     credenciais = ServiceAccountCredentials.from_json_keyfile_dict(
         st.secrets["gcp_service_account"], ESCOPO
     )
     cliente = gspread.authorize(credenciais)
-    ambiente = st.secrets.get("ambiente", "teste")
-    chave = "id_producao" if ambiente == "producao" else "id_teste"
+    chave = "id_producao" if _ambiente_planilha() == "producao" else "id_teste"
     return cliente.open_by_key(st.secrets["planilhas"][chave])
 
 

@@ -38,6 +38,18 @@ def carregar_secrets() -> dict:
         return tomllib.load(f)
 
 
+def ambiente_planilha(secrets: dict) -> str:
+    valor = secrets.get("ambiente")
+    if valor is None:
+        valor = secrets.get("planilhas", {}).get("ambiente")
+    if valor is None:
+        valor = secrets.get("gcp_service_account", {}).get("ambiente")
+    ambiente = str(valor or "teste").strip().lower()
+    if ambiente in {"producao", "produção", "production", "prod"}:
+        return "producao"
+    return "teste"
+
+
 def conectar_planilha(secrets: dict):
     escopo = [
         "https://spreadsheets.google.com/feeds",
@@ -47,8 +59,7 @@ def conectar_planilha(secrets: dict):
         secrets["gcp_service_account"], escopo
     )
     cliente = gspread.authorize(creds)
-    ambiente = secrets.get("ambiente", "teste")
-    chave = "id_producao" if ambiente == "producao" else "id_teste"
+    chave = "id_producao" if ambiente_planilha(secrets) == "producao" else "id_teste"
     return cliente.open_by_key(secrets["planilhas"][chave])
 
 
@@ -253,7 +264,7 @@ def main():
         print("Nenhum usuário ativo encontrado para importar.")
         sys.exit(0)
 
-    print(f"Ambiente planilha: {secrets.get('ambiente', 'teste')}")
+    print(f"Ambiente planilha: {ambiente_planilha(secrets)}")
     print(f"Usuários a processar: {len(usuarios)}")
     if args.dry_run:
         print("Modo DRY-RUN — nada será gravado no Supabase.\n")

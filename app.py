@@ -14,7 +14,13 @@ from auth.supabase_auth import (
     usuario_e_coordenador,
     validar_senha,
 )
-from data.sheets import ler_aba, ler_aba_frequencia, limpar_cache_planilhas, planilha
+from data.sheets import (
+    ler_aba,
+    ler_aba_frequencia,
+    limpar_cache_planilhas,
+    planilha,
+    preparar_ambiente_planilhas,
+)
 from domain.ciclos import obter_disciplina_ativa
 from domain.notas import calcular_nota_pares
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca, compilar_grid_frequencia
@@ -145,6 +151,7 @@ elif st.session_state["usuario_logado"].get("deve_trocar_senha"):
 else:
     aluno = st.session_state["usuario_logado"]
     perfil = aluno.get("perfil", "Aluno")
+    preparar_ambiente_planilhas()
 
     st.sidebar.write(f"**{aluno['nome']}**")
     st.sidebar.caption(f"{aluno['email']} · {perfil}")

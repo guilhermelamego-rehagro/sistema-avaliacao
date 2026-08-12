@@ -1,0 +1,277 @@
+"""Rotas, seções do menu lateral e compatibilidade com nomes legados."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import streamlit as st
+
+from auth.supabase_auth import professor_e_orientador, usuario_e_coordenador
+from domain.ciclos import obter_disciplina_ativa
+from domain.entregas import disciplina_com_entregas_abertas
+
+# --- Rotas internas (estáveis no código) ---
+ROTA_INICIO = "inicio"
+
+# Aluno — avaliar
+ROTA_PARES_AVALIAR = "pares_avaliar"
+ROTA_CURSO_AVALIAR = "curso_avaliar"
+
+# Aluno — desempenho
+ROTA_FREQ_AULAS = "freq_aulas"
+ROTA_FREQ_DAILIES = "freq_dailies"
+ROTA_RESULTADOS_PARES = "resultados_pares"
+ROTA_MINHAS_NOTAS = "minhas_notas"
+
+# Professor orientador
+ROTA_PARES_ACOMP = "pares_acompanhamento"
+ROTA_MODERACAO = "moderacao"
+ROTA_ORIENTADOR = "orientador"
+ROTA_LANCAR_BANCA = "lancar_banca"
+ROTA_FREQ_CONTROLE = "freq_controle"
+ROTA_IMPORT_CANVAS = "import_canvas"
+ROTA_LIBERAR_NOTAS = "liberar_notas"
+
+# Coordenador
+ROTA_COORD_CONFIG = "coord_config"
+ROTA_COORD_COMPONENTES = "coord_componentes"
+ROTA_COORD_CONFERIR = "coord_conferir"
+
+ROTAS_LAYOUT_LARGO = frozenset(
+    {
+        ROTA_FREQ_CONTROLE,
+        ROTA_ORIENTADOR,
+        ROTA_COORD_CONFERIR,
+        ROTA_PARES_ACOMP,
+        ROTA_LANCAR_BANCA,
+    }
+)
+
+LEGACY_ROUTES: dict[str, str] = {
+    "Painel Geral": ROTA_PARES_ACOMP,
+    "Componentes de Avaliação": ROTA_COORD_COMPONENTES,
+    "Avaliação de Grupo": ROTA_LANCAR_BANCA,
+    "Avaliação de pares": ROTA_PARES_AVALIAR,
+    "Avaliação do curso": ROTA_CURSO_AVALIAR,
+    "Meus resultados de pares": ROTA_RESULTADOS_PARES,
+    "Minhas Notas": ROTA_MINHAS_NOTAS,
+    "Minha Frequência": ROTA_FREQ_AULAS,
+    "Minhas Dailies": ROTA_FREQ_DAILIES,
+    "Avaliações de pares": ROTA_PARES_ACOMP,
+    "Moderação de Comentários": ROTA_MODERACAO,
+    "Controle de Frequência": ROTA_FREQ_CONTROLE,
+    "Cadastro de Avaliações": ROTA_COORD_COMPONENTES,
+    "Configurações do Coordenador": ROTA_COORD_CONFIG,
+    "Conferência de Entregas": ROTA_COORD_CONFERIR,
+    "Avaliação do Orientador": ROTA_ORIENTADOR,
+    "Avaliação de Entregas": ROTA_LANCAR_BANCA,
+    "Importar Canvas": ROTA_IMPORT_CANVAS,
+}
+
+
+@dataclass(frozen=True)
+class ItemMenu:
+    rota: str
+    rotulo: str
+
+
+@dataclass(frozen=True)
+class SecaoMenu:
+    titulo: str | None
+    itens: tuple[ItemMenu, ...]
+
+
+def normalizar_rota(rota: str | None) -> str:
+    if not rota:
+        return ROTA_INICIO
+    return LEGACY_ROUTES.get(rota, rota)
+
+
+def rota_padrao(usuario: dict, perfil: str) -> str:
+    if perfil == "Aluno":
+        return ROTA_INICIO
+    if perfil == "Secretaria":
+        return ROTA_FREQ_CONTROLE
+    if perfil == "Professor":
+        return ROTA_LANCAR_BANCA
+    return ROTA_INICIO
+
+
+def pode_gerenciar_liberacao_notas(usuario: dict) -> bool:
+    if professor_e_orientador(usuario):
+        return True
+    if usuario.get("perfil") == "Professor" and usuario_e_coordenador(usuario):
+        return bool(st.session_state.get("modo_coordenador", False))
+    return False
+
+
+def _rotulo_lancar_banca() -> str:
+    id_disc, _ = obter_disciplina_ativa()
+    if id_disc and disciplina_com_entregas_abertas(id_disc):
+        return "Lançar notas da banca (janela aberta)"
+    return "Lançar notas da banca"
+
+
+def _item_liberacao_notas() -> ItemMenu:
+    return ItemMenu(ROTA_LIBERAR_NOTAS, "Liberação de notas finais")
+
+
+def _secoes_aluno() -> list[SecaoMenu]:
+    return [
+        SecaoMenu(None, (ItemMenu(ROTA_INICIO, "Início"),)),
+        SecaoMenu(
+            "Avaliar",
+            (
+                ItemMenu(ROTA_PARES_AVALIAR, "Pares — avaliar"),
+                ItemMenu(ROTA_CURSO_AVALIAR, "Avaliação do curso"),
+            ),
+        ),
+        SecaoMenu(
+            "Meu desempenho e participação",
+            (
+                ItemMenu(ROTA_FREQ_AULAS, "Frequência nas aulas"),
+                ItemMenu(ROTA_FREQ_DAILIES, "Participação nas dailies"),
+                ItemMenu(ROTA_RESULTADOS_PARES, "Resultados de pares"),
+                ItemMenu(ROTA_MINHAS_NOTAS, "Minhas notas (boletim)"),
+            ),
+        ),
+    ]
+
+
+def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[SecaoMenu]:
+    itens_avaliacoes: list[ItemMenu] = [
+        ItemMenu(ROTA_PARES_ACOMP, "Pares — acompanhamento"),
+        ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
+        ItemMenu(ROTA_MODERACAO, "Moderação de comentários"),
+    ]
+    if professor_e_orientador(usuario):
+        itens_avaliacoes.append(_item_liberacao_notas())
+
+    secoes: list[SecaoMenu] = [
+        SecaoMenu(
+            "Entregas",
+            (ItemMenu(ROTA_LANCAR_BANCA, _rotulo_lancar_banca()),),
+        ),
+        SecaoMenu("Avaliações do ciclo", tuple(itens_avaliacoes)),
+        SecaoMenu(
+            "Presença",
+            (ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),),
+        ),
+        SecaoMenu(
+            "Integrações",
+            (ItemMenu(ROTA_IMPORT_CANVAS, "Importar Canvas"),),
+        ),
+    ]
+    if modo_coordenador:
+        itens_coord: list[ItemMenu] = [
+            ItemMenu(ROTA_COORD_CONFIG, "Configurações do coordenador"),
+            ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
+            ItemMenu(ROTA_COORD_CONFERIR, "Conferir entregas"),
+        ]
+        if not professor_e_orientador(usuario):
+            itens_coord.append(_item_liberacao_notas())
+        secoes.insert(
+            0,
+            SecaoMenu("Coordenação", tuple(itens_coord)),
+        )
+    return secoes
+
+
+def _secoes_especialista() -> list[SecaoMenu]:
+    return [
+        SecaoMenu(
+            "Entregas",
+            (ItemMenu(ROTA_LANCAR_BANCA, _rotulo_lancar_banca()),),
+        ),
+    ]
+
+
+def _secoes_secretaria() -> list[SecaoMenu]:
+    return [
+        SecaoMenu(
+            "Presença",
+            (ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),),
+        ),
+    ]
+
+
+def secoes_menu(usuario: dict, perfil: str) -> list[SecaoMenu]:
+    if perfil == "Aluno":
+        return _secoes_aluno()
+    if perfil == "Secretaria":
+        return _secoes_secretaria()
+    if perfil == "Professor":
+        tipo = usuario.get("tipo_professor") or "Orientador"
+        if tipo == "Especialista":
+            return _secoes_especialista()
+        modo = bool(st.session_state.get("modo_coordenador", False))
+        return _secoes_professor_orientador(usuario, modo)
+    return [SecaoMenu(None, (ItemMenu(ROTA_INICIO, "Início"),))]
+
+
+def rotas_permitidas(secoes: list[SecaoMenu]) -> list[str]:
+    rotas: list[str] = []
+    for secao in secoes:
+        for item in secao.itens:
+            rotas.append(item.rota)
+    return rotas
+
+
+def titulo_sidebar(perfil: str, usuario: dict) -> str:
+    if perfil == "Aluno":
+        return "Menu do aluno"
+    if perfil == "Secretaria":
+        return "Menu da secretaria"
+    if perfil == "Professor":
+        tipo = usuario.get("tipo_professor") or "Orientador"
+        if tipo == "Especialista":
+            return "Menu do especialista"
+        return "Menu do professor"
+    return "Menu"
+
+
+def renderizar_sidebar(usuario: dict, perfil: str) -> str:
+    """Desenha o menu lateral e retorna a rota selecionada."""
+    st.sidebar.title(titulo_sidebar(perfil, usuario))
+
+    if perfil == "Professor":
+        tipo = usuario.get("tipo_professor") or "Orientador"
+        st.sidebar.caption(f"Tipo de professor: **{tipo}**")
+        if usuario_e_coordenador(usuario):
+            modo = st.sidebar.toggle(
+                "Modo coordenador",
+                value=bool(st.session_state.get("modo_coordenador", False)),
+                key="toggle_modo_coordenador",
+            )
+            st.session_state["modo_coordenador"] = modo
+
+    secoes = secoes_menu(usuario, perfil)
+    permitidas = rotas_permitidas(secoes)
+    padrao = rota_padrao(usuario, perfil)
+
+    rota_atual = normalizar_rota(st.session_state.get("escolha_menu"))
+    if rota_atual not in permitidas:
+        rota_atual = padrao
+        st.session_state["escolha_menu"] = padrao
+
+    for secao in secoes:
+        if secao.titulo:
+            st.sidebar.markdown(f"**{secao.titulo}**")
+        for item in secao.itens:
+            ativo = item.rota == rota_atual
+            if st.sidebar.button(
+                item.rotulo,
+                key=f"nav_{item.rota}",
+                width="stretch",
+                type="primary" if ativo else "secondary",
+            ):
+                if item.rota != rota_atual:
+                    st.session_state["escolha_menu"] = item.rota
+                    st.rerun()
+
+    return rota_atual
+
+
+def ir_para(rota: str):
+    st.session_state["escolha_menu"] = rota
+    st.rerun()

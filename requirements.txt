@@ -1,4 +1,4 @@
-streamlit>=1.48<2
+streamlit>=1.48, <2
 gspread
 pandas
 oauth2client

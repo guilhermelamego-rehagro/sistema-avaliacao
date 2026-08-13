@@ -4,14 +4,22 @@ from __future__ import annotations
 
 import streamlit as st
 
-from auth.supabase_auth import cliente_admin, professor_e_orientador
+from auth.supabase_auth import cliente_admin, professor_e_orientador, usuario_e_coordenador
 from utils.ordenacao import ordenar_grupos_lista
 
 _CHAVE = "pref_sala"
 
 
+def _orientadora_exclusiva(usuario: dict) -> bool:
+    return (
+        usuario.get("perfil") == "Professor"
+        and professor_e_orientador(usuario)
+        and not usuario_e_coordenador(usuario)
+    )
+
+
 def _deve_lembrar(usuario: dict) -> bool:
-    return usuario.get("perfil") == "Professor" and professor_e_orientador(usuario)
+    return _orientadora_exclusiva(usuario)
 
 
 def sala_lembrada(usuario: dict) -> str:

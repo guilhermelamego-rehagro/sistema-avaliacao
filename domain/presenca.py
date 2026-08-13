@@ -47,18 +47,85 @@ def _preparar_calendario(df_calendario: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+_PALAVRAS_DAILY = ("daily", "dailie", "reuniao", "reunião", "orientacao", "orientação")
+
+
+def _eh_chave_daily(chave: str) -> bool:
+    texto = str(chave or "").strip().lower()
+    return any(p in texto for p in _PALAVRAS_DAILY)
+
+
+def _chaves_compativeis(a: str, b: str) -> bool:
+    ca = str(a or "").strip().lower()
+    cb = str(b or "").strip().lower()
+    if not ca or not cb:
+        return False
+    if ca == cb:
+        return True
+    return ca in cb or cb in ca
+
+
 def _preparar_meet(df_bd_presenca: pd.DataFrame) -> pd.DataFrame:
     if df_bd_presenca.empty or "Email" not in df_bd_presenca.columns:
         return pd.DataFrame(columns=["Email_Limpo", "Data_Formatada", "Chave_Disc", "Minutos"])
 
     df = df_bd_presenca.copy()
     df["Email_Limpo"] = df["Email"].astype(str).str.strip().str.lower()
-    df["Data_Formatada"] = parse_data_planilha_series(df["Data"])
+    df["Data_Formatada"] = pd.to_datetime(
+        parse_data_planilha_series(df["Data"]), errors="coerce"
+    ).dt.normalize()
     df["Chave_Disc"] = df["Disciplina"].astype(str).str.strip().str.lower()
     return (
         df.groupby(["Email_Limpo", "Data_Formatada", "Chave_Disc"], as_index=False)["Minutos"]
         .sum()
     )
+
+
+def _cruzar_minutos(base: pd.DataFrame, meet: pd.DataFrame, *, tipo: str = "aulas") -> pd.DataFrame:
+    out = base.copy()
+    if meet.empty or out.empty:
+        out["Minutos"] = 0.0
+        return out
+
+    meet = meet.copy()
+    meet["Data_Formatada"] = pd.to_datetime(meet["Data_Formatada"], errors="coerce").dt.normalize()
+    meet_exato = meet.rename(columns={"Minutos": "Minutos_Meet"})
+    out = out.merge(
+        meet_exato,
+        on=["Email_Limpo", "Data_Formatada", "Chave_Disc"],
+        how="left",
+    )
+    out["Minutos"] = pd.to_numeric(out["Minutos_Meet"], errors="coerce").fillna(0)
+    out = out.drop(columns=["Minutos_Meet"], errors="ignore")
+
+    pendentes = out["Minutos"].eq(0)
+    if not pendentes.any():
+        return out
+
+    for idx in out.index[pendentes]:
+        email = out.at[idx, "Email_Limpo"]
+        data = out.at[idx, "Data_Formatada"]
+        chave = out.at[idx, "Chave_Disc"]
+        candidatos = meet[
+            (meet["Email_Limpo"] == email) & (meet["Data_Formatada"] == data)
+        ]
+        if candidatos.empty:
+            continue
+        if tipo == "dailies":
+            compat = candidatos[candidatos["Chave_Disc"].map(_eh_chave_daily)]
+            if compat.empty:
+                compat = candidatos[
+                    candidatos["Chave_Disc"].map(lambda c: _chaves_compativeis(chave, c))
+                ]
+        else:
+            compat = candidatos[
+                candidatos["Chave_Disc"].map(lambda c: _chaves_compativeis(chave, c))
+            ]
+            if compat.empty and not _eh_chave_daily(chave):
+                compat = candidatos[~candidatos["Chave_Disc"].map(_eh_chave_daily)]
+        if not compat.empty:
+            out.at[idx, "Minutos"] = float(compat["Minutos"].sum())
+    return out
 
 
 def _preparar_ajustes(df_ajustes: pd.DataFrame) -> pd.DataFrame:
@@ -153,8 +220,7 @@ def calcular_matriz_presencas(email_aluno: str, dfs_cache: dict | None = None) -
 
     meet = _preparar_meet(df_bd_presenca)
     meet = meet[meet["Email_Limpo"] == email_aluno]
-    matriz = aulas.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
-    matriz["Minutos"] = matriz["Minutos"].fillna(0)
+    matriz = _cruzar_minutos(aulas, meet, tipo="aulas")
 
     ajustes = _preparar_ajustes(df_ajustes)
     ajustes = ajustes[ajustes["Email_Limpo"] == email_aluno]
@@ -182,24 +248,8 @@ def calcular_matriz_dailies(email_aluno: str, dfs_cache: dict | None = None) -> 
 
     meet = _preparar_meet(df_bd_presenca)
     meet = meet[meet["Email_Limpo"] == email_aluno]
-    matriz = dailies.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
-    matriz["Minutos"] = matriz["Minutos"].fillna(0)
-
-    hoje = hoje_normalizado()
-    matriz["Data_Formatada"] = pd.to_datetime(matriz["Data_Formatada"], errors="coerce").dt.normalize()
-    matriz["Status_Tecnico"] = "Falta"
-    matriz["Status_Aluno"] = "Falta"
-    matriz.loc[matriz["Data_Formatada"].isna(), ["Status_Tecnico", "Status_Aluno"]] = [
-        "Erro",
-        "Data Inválida",
-    ]
-    matriz.loc[matriz["Data_Formatada"] >= hoje, "Status_Tecnico"] = "Futuro"
-    matriz.loc[matriz["Data_Formatada"] >= hoje, "Status_Aluno"] = "Agendada"
-    passado = (matriz["Data_Formatada"] < hoje) & matriz["Data_Formatada"].notna()
-    matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Tecnico"] = "Presente"
-    matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Aluno"] = "Presente"
-    matriz["Data"] = matriz["Data_Formatada"]
-    return matriz
+    matriz = _cruzar_minutos(dailies, meet, tipo="dailies")
+    return _aplicar_status_dailies(matriz)
 
 
 def _aplicar_status_dailies(matriz: pd.DataFrame) -> pd.DataFrame:
@@ -235,6 +285,8 @@ def _compilar_grid_de_matriz(
         if email not in meta.index:
             continue
         aluno = meta.loc[email]
+        if isinstance(aluno, pd.DataFrame):
+            aluno = aluno.iloc[0]
         vivido = grupo[grupo["Status_Tecnico"] != "Futuro"]
         futuro = grupo[grupo["Status_Tecnico"] == "Futuro"]
         pres = len(vivido[vivido["Status_Aluno"] == "Presente"])
@@ -296,8 +348,7 @@ def compilar_grid_frequencia(
 
     meet = _preparar_meet(dfs_cache["bd"].copy())
     meet = meet[meet["Email_Limpo"].isin(emails_alvo)]
-    matriz = base.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
-    matriz["Minutos"] = matriz["Minutos"].fillna(0)
+    matriz = _cruzar_minutos(base, meet, tipo="aulas")
 
     ajustes = _preparar_ajustes(dfs_cache["ajustes"].copy())
     ajustes = ajustes[ajustes["Email_Limpo"].isin(emails_alvo)]
@@ -326,7 +377,6 @@ def compilar_grid_dailies(
 
     meet = _preparar_meet(dfs_cache["bd"].copy())
     meet = meet[meet["Email_Limpo"].isin(emails_alvo)]
-    matriz = base.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
-    matriz["Minutos"] = matriz["Minutos"].fillna(0)
+    matriz = _cruzar_minutos(base, meet, tipo="dailies")
     matriz = _aplicar_status_dailies(matriz)
     return _compilar_grid_de_matriz(matriz, alunos_turma)

@@ -101,7 +101,11 @@ def fazer_login(email: str, senha: str) -> tuple[dict | None, str | None]:
     st.session_state["sb_refresh_token"] = auth.session.refresh_token
     usuario = montar_usuario_logado(auth.session, perfil)
     st.session_state["usuario_logado"] = usuario
-    if usuario.get("ultima_sala"):
+    if (
+        usuario.get("ultima_sala")
+        and professor_e_orientador(usuario)
+        and not usuario_e_coordenador(usuario)
+    ):
         st.session_state["pref_sala"] = usuario["ultima_sala"]
     return usuario, None
 

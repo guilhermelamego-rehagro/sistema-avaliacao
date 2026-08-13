@@ -18,6 +18,7 @@ from domain.avaliacoes import (
 from domain.ciclos import ordenar_ciclos
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
+from utils.preferencias_sala import selectbox_sala
 from utils.ordenacao import ordenar_df_grupos, ordenar_grupos_lista
 
 _LARGURA_SALA_REM = 6.75
@@ -565,7 +566,13 @@ def render(usuario: dict):
 
     c1, c2, c3 = st.columns(3)
     salas = sorted(grupos["Sala"].dropna().astype(str).unique().tolist())
-    filtro_sala = c1.selectbox("Filtrar sala:", ["Todas"] + salas, key="coord_ent_sala")
+    with c1:
+        filtro_sala = selectbox_sala(
+            "Filtrar sala:",
+            salas,
+            key="coord_ent_sala",
+            usuario=usuario,
+        )
     opcoes_grupo = ordenar_grupos_lista(grupos["Grupo"].astype(str).unique().tolist())
     filtro_grupo = c2.selectbox("Filtrar grupo:", ["Todos"] + opcoes_grupo, key="coord_ent_grupo")
     ciclos_filtro = c3.multiselect(

@@ -14,6 +14,7 @@ from domain.entregas import (
     proximo_grupo_pendente,
 )
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
+from utils.preferencias_sala import selectbox_sala
 from utils.logs import registrar_log
 
 
@@ -75,7 +76,13 @@ def render(usuario: dict):
         st.warning("Nenhuma sala cadastrada.")
         return
 
-    sala_sel = st.selectbox("Sala:", salas, key=f"entrega_sala_{id_disc}_{id_ciclo}")
+    sala_sel = selectbox_sala(
+        "Sala:",
+        salas,
+        key=f"entrega_sala_{id_disc}_{id_ciclo}",
+        usuario=usuario,
+        incluir_todas=False,
+    )
     grupos_base = grupos_da_sala(entrancia, sala_sel)
     if not grupos_base:
         st.warning("Nenhum grupo nesta sala.")

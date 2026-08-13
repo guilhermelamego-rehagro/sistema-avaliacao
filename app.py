@@ -23,7 +23,7 @@ from data.sheets import (
 )
 from domain.ciclos import hoje_normalizado, indice_ciclo_padrao, obter_disciplina_ativa
 from domain.notas import calcular_nota_pares
-from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca, compilar_grid_frequencia
+from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca
 from utils.disciplina import normalizar_id
 from utils.logs import registrar_log, registrar_log_acesso
 from navigation import (
@@ -35,6 +35,7 @@ from navigation import (
     ROTA_FREQ_AULAS,
     ROTA_FREQ_CONTROLE,
     ROTA_FREQ_DAILIES,
+    ROTA_FREQ_DAILIES_PROF,
     ROTA_IMPORT_CANVAS,
     ROTA_INICIO,
     ROTA_LANCAR_BANCA,
@@ -51,7 +52,8 @@ from navigation import (
 )
 from views import aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_liberacao_notas
+from views import home_aluno, prof_controle_presenca, prof_liberacao_notas
+from utils.preferencias_sala import selectbox_sala
 
 # 1. Configurações Iniciais da Página
 st.set_page_config(page_title="Portal de Avaliações - Rehagro", page_icon="🎓", layout="wide")
@@ -501,7 +503,13 @@ else:
         # FILTROS ADICIONAIS (SALA, GRUPO, NOME)
         # ---------------------------------------------------------
         entrancia_disc = df_entrancia[df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
-        sala_sel = st.selectbox("Selecione a Sala:", ["Todas"] + sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist()))
+        salas_pares = sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
+        sala_sel = selectbox_sala(
+            "Selecione a Sala:",
+            salas_pares,
+            key="geral_sala_sel",
+            usuario=aluno,
+        )
         
         def chave_ordenacao_geral(x):
             try:
@@ -688,8 +696,13 @@ else:
         
         with c_filt3:
             entrancia_disc = df_turmas[df_turmas['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
-            salas_disponiveis = ["Todas"] + sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
-            sala_sel = st.selectbox("Filtrar por Sala:", salas_disponiveis, key="mod_sala_sel")
+            salas_disponiveis = sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
+            sala_sel = selectbox_sala(
+                "Filtrar por Sala:",
+                salas_disponiveis,
+                key="mod_sala_sel",
+                usuario=aluno,
+            )
             
         with c_filt4:
             def chave_ordenacao_grupo(x):
@@ -923,103 +936,12 @@ else:
     elif menu == ROTA_FREQ_CONTROLE and (
         perfil == "Secretaria" or (perfil == "Professor" and professor_e_orientador(aluno))
     ):
-        st.header("Controle de frequência")
-        df_entrancia = ler_aba("Entrancia_Turma")
-        df_disciplinas = ler_aba("Disciplinas")
-        df_alunos_base = ler_aba("Base_Alunos") # Puxa para pegar a Turma_Ingresso
-        
-        lista_opcoes = df_disciplinas.apply(lambda x: f"{x['ID_Disciplina']} - {x['Nome_Disciplina']}", axis=1).tolist()
-        idx_ativo = 0
-        ativas = df_disciplinas[df_disciplinas['Status'] == 'Ativo']
-        if not ativas.empty:
-            id_ativo = ativas.iloc[0]['ID_Disciplina']
-            for i, val in enumerate(lista_opcoes):
-                if val.startswith(id_ativo): idx_ativo = i; break
-                    
-        disc_sel = st.selectbox("Selecione a Disciplina para análise:", lista_opcoes, index=idx_ativo)
-        id_disciplina_sel = disc_sel.split(" - ")[0]
-        
-        alunos_turma = df_entrancia[
-            df_entrancia["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disciplina_sel)
-        ].copy()
-        alunos_turma = pd.merge(alunos_turma, df_alunos_base[['Email_Pessoal', 'Turma_Ingresso']], on='Email_Pessoal', how='left')
+        prof_controle_presenca.render(aluno, tipo="aulas")
 
-        with st.spinner("Compilando frequência..."):
-            memoria_cache = carregar_base_presenca()
-            memoria_cache["entrancia"] = df_entrancia
-            df_resumo, df_raw = compilar_grid_frequencia(
-                id_disciplina_sel, alunos_turma, memoria_cache
-            )
-
-        if not df_raw.empty:
-            datas_unicas = df_raw[['Data_Sort', 'Data_Visual']].drop_duplicates().sort_values('Data_Sort')
-            colunas_datas_ordenadas = datas_unicas['Data_Visual'].tolist()
-            
-            df_pivot = df_raw.pivot(index="Email_Cru", columns="Data_Visual", values="Status").reset_index().fillna("-")
-            df_final = pd.merge(df_resumo, df_pivot, on="Email_Cru", how="left")
-            
-            def ordenacao_natural(lista):
-                converte = lambda texto: int(texto) if str(texto).isdigit() else str(texto).lower()
-                chave = lambda chave: [converte(c) for c in re.split('([0-9]+)', str(chave))]
-                return sorted(lista, key=chave)
-
-            turmas_opcoes = ordenacao_natural(df_final['Turma'].unique())
-            salas_opcoes = ordenacao_natural(df_final['Sala'].unique())
-            grupos_opcoes = ordenacao_natural(df_final['Grupo'].unique())
-
-            st.markdown("---")
-            c1, c2, c3 = st.columns(3)
-            turma_filtro = c1.multiselect("Filtrar por Turma:", turmas_opcoes)
-            sala_filtro = c2.multiselect("Filtrar por Sala:", salas_opcoes)
-            grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes)
-            
-            c4, c5 = st.columns(2)
-            nome_busca = c4.text_input("Buscar por Nome do Aluno:")
-            faixa_projetada = c5.slider("Filtrar por % Projetada:", min_value=0.0, max_value=100.0, value=(0.0, 100.0), format="%.0f%%")
-            
-            if turma_filtro: df_final = df_final[df_final['Turma'].isin(turma_filtro)]
-            if sala_filtro: df_final = df_final[df_final['Sala'].isin(sala_filtro)]
-            if grupo_filtro: df_final = df_final[df_final['Grupo'].isin(grupo_filtro)]
-            if nome_busca: df_final = df_final[df_final['Nome'].str.contains(nome_busca, case=False, na=False)]
-            
-            df_final = df_final[(df_final['% Projetado'] >= faixa_projetada[0]) & (df_final['% Projetado'] <= faixa_projetada[1])]
-            
-            if df_final.empty:
-                st.warning("Nenhum aluno encontrado com esses filtros.")
-            else:
-                df_final = df_final.set_index("Nome")
-                cols_fixas = ["Turma", "Sala", "Grupo", "% Realizado", "% Projetado"]
-                cols_finais = cols_fixas + [c for c in colunas_datas_ordenadas if c in df_final.columns]
-                df_final = df_final[cols_finais]
-                
-                # --- EXPORTAÇÃO EXCEL ---
-                st.markdown("<br>", unsafe_allow_html=True)
-                df_excel = df_final.copy()
-                # Substitui os ícones por Letras
-                df_excel = df_excel.replace({"✅": "P", "❌": "F", "⏳": "C", "✏️": "A"})
-                
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    df_excel.to_excel(writer, index=True, sheet_name='Frequencia')
-                
-                col_exp, _ = st.columns([1, 2])
-                col_exp.download_button(
-                    label="📥 Exportar Dados para Excel (.xlsx)",
-                    data=buffer.getvalue(),
-                    file_name=f"Controle_Frequencia_{id_disciplina_sel}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width="stretch"
-                )
-                # -------------------------
-
-                config_colunas = {
-                    "% Realizado": st.column_config.NumberColumn("% Realizado", format="%.1f %%"),
-                    "% Projetado": st.column_config.NumberColumn("% Projetado", format="%.1f %%")
-                }
-                st.caption("Legenda na tela: ✅ Presente | ❌ Falta | ⏳ Conectado (<30min) | ✏️ Ajuste Manual | 📅 Aula futura")
-                st.dataframe(df_final, width="stretch", column_config=config_colunas)
-        else:
-            st.info("Nenhuma aula registrada ainda para esta disciplina.")
+    elif menu == ROTA_FREQ_DAILIES_PROF and perfil == "Professor" and (
+        professor_e_orientador(aluno) or usuario_e_coordenador(aluno)
+    ):
+        prof_controle_presenca.render(aluno, tipo="dailies")
 
     # =========================================================
     # MÓDULO ALUNO: MINHAS NOTAS

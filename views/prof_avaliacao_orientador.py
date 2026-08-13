@@ -13,6 +13,7 @@ from domain.avaliacoes import (
 from domain.ciclos import ordenar_ciclos
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
+from utils.preferencias_sala import selectbox_sala
 from utils.ordenacao import ordenar_grupos_lista
 
 
@@ -145,7 +146,13 @@ def render(usuario: dict):
     c1, c2, c3 = st.columns(3)
     filtro_nome = c1.text_input("Filtrar por aluno:")
     salas = sorted(alunos["Sala"].dropna().astype(str).unique().tolist())
-    filtro_sala = c2.selectbox("Sala:", ["Todas"] + salas)
+    with c2:
+        filtro_sala = selectbox_sala(
+            "Sala:",
+            salas,
+            key="orientador_sala",
+            usuario=usuario,
+        )
     grupos = ordenar_grupos_lista(alunos["Grupo"].dropna().astype(str).unique().tolist())
     filtro_grupo = c3.selectbox("Grupo:", ["Todos"] + grupos)
 

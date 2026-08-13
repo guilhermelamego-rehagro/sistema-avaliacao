@@ -59,6 +59,12 @@ def buscar_perfil(user_id: str) -> dict | None:
 
 
 def montar_usuario_logado(session, perfil: dict) -> dict:
+    meta = {}
+    user = getattr(session, "user", None) if session is not None else None
+    if user is not None:
+        meta = getattr(user, "user_metadata", None) or {}
+    if not isinstance(meta, dict):
+        meta = {}
     return {
         "id": perfil["id"],
         "email": perfil["email"],
@@ -67,6 +73,7 @@ def montar_usuario_logado(session, perfil: dict) -> dict:
         "tipo_professor": perfil.get("tipo_professor"),
         "coordenador": bool(perfil.get("coordenador", False)),
         "deve_trocar_senha": perfil.get("deve_trocar_senha", False),
+        "ultima_sala": str(meta.get("ultima_sala") or "").strip(),
     }
 
 
@@ -94,6 +101,8 @@ def fazer_login(email: str, senha: str) -> tuple[dict | None, str | None]:
     st.session_state["sb_refresh_token"] = auth.session.refresh_token
     usuario = montar_usuario_logado(auth.session, perfil)
     st.session_state["usuario_logado"] = usuario
+    if usuario.get("ultima_sala"):
+        st.session_state["pref_sala"] = usuario["ultima_sala"]
     return usuario, None
 
 

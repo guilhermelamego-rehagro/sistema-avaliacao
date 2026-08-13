@@ -16,6 +16,7 @@ from domain.entregas import (
 )
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
+from utils.preferencias_sala import selectbox_sala
 
 
 def _chave_lista_ordem(id_disc: str, id_ciclo: str, sala: str) -> str:
@@ -28,7 +29,13 @@ def _render_ordem_sala(id_disc: str, id_ciclo: str, ciclo_sel: str, entrancia: p
         st.warning("Nenhuma sala cadastrada na entrância.")
         return
 
-    sala_sel = st.selectbox("Sala:", salas, key=f"coord_sala_{id_disc}_{id_ciclo}")
+    sala_sel = selectbox_sala(
+        "Sala:",
+        salas,
+        key=f"coord_sala_{id_disc}_{id_ciclo}",
+        usuario=usuario,
+        incluir_todas=False,
+    )
     grupos_base = grupos_da_sala(entrancia, sala_sel)
     if not grupos_base:
         st.info("Nenhum grupo nesta sala.")

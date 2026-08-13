@@ -29,6 +29,7 @@ ROTA_MODERACAO = "moderacao"
 ROTA_ORIENTADOR = "orientador"
 ROTA_LANCAR_BANCA = "lancar_banca"
 ROTA_FREQ_CONTROLE = "freq_controle"
+ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
 ROTA_IMPORT_CANVAS = "import_canvas"
 ROTA_LIBERAR_NOTAS = "liberar_notas"
 
@@ -40,6 +41,7 @@ ROTA_COORD_CONFERIR = "coord_conferir"
 ROTAS_LAYOUT_LARGO = frozenset(
     {
         ROTA_FREQ_CONTROLE,
+        ROTA_FREQ_DAILIES_PROF,
         ROTA_ORIENTADOR,
         ROTA_COORD_CONFERIR,
         ROTA_PARES_ACOMP,
@@ -60,6 +62,7 @@ LEGACY_ROUTES: dict[str, str] = {
     "Avaliações de pares": ROTA_PARES_ACOMP,
     "Moderação de Comentários": ROTA_MODERACAO,
     "Controle de Frequência": ROTA_FREQ_CONTROLE,
+    "Controle de dailies": ROTA_FREQ_DAILIES_PROF,
     "Cadastro de Avaliações": ROTA_COORD_COMPONENTES,
     "Configurações do Coordenador": ROTA_COORD_CONFIG,
     "Conferência de Entregas": ROTA_COORD_CONFERIR,
@@ -155,7 +158,10 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
         SecaoMenu("Avaliações do ciclo", tuple(itens_avaliacoes)),
         SecaoMenu(
             "Presença",
-            (ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),),
+            (
+                ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),
+                ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"),
+            ),
         ),
         SecaoMenu(
             "Integrações",
@@ -169,6 +175,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
             ItemMenu(ROTA_COORD_CONFERIR, "Conferir entregas"),
         ]
         if not professor_e_orientador(usuario):
+            itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))
             itens_coord.append(_item_liberacao_notas())
         secoes.insert(
             0,

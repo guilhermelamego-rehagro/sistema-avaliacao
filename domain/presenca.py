@@ -202,38 +202,28 @@ def calcular_matriz_dailies(email_aluno: str, dfs_cache: dict | None = None) -> 
     return matriz
 
 
-def compilar_grid_frequencia(
-    id_disciplina: str,
-    alunos_turma: pd.DataFrame,
-    dfs_cache: dict | None = None,
+def _aplicar_status_dailies(matriz: pd.DataFrame) -> pd.DataFrame:
+    hoje = hoje_normalizado()
+    df = matriz.copy()
+    df["Data_Formatada"] = pd.to_datetime(df["Data_Formatada"], errors="coerce").dt.normalize()
+    df["Status_Tecnico"] = "Falta"
+    df["Status_Aluno"] = "Falta"
+    df.loc[df["Data_Formatada"].isna(), ["Status_Tecnico", "Status_Aluno"]] = [
+        "Erro",
+        "Data Inválida",
+    ]
+    df.loc[df["Data_Formatada"] >= hoje, "Status_Tecnico"] = "Futuro"
+    df.loc[df["Data_Formatada"] >= hoje, "Status_Aluno"] = "Agendada"
+    passado = (df["Data_Formatada"] < hoje) & df["Data_Formatada"].notna()
+    df.loc[passado & (df["Minutos"] > 0), "Status_Tecnico"] = "Presente"
+    df.loc[passado & (df["Minutos"] > 0), "Status_Aluno"] = "Presente"
+    df["Data"] = df["Data_Formatada"]
+    return df
+
+
+def _compilar_grid_de_matriz(
+    matriz: pd.DataFrame, alunos_turma: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Compila resumo e grid de frequência para todos os alunos de uma disciplina em lote.
-    Retorna (df_resumo, df_grid_detalhe).
-    """
-    if dfs_cache is None:
-        dfs_cache = carregar_base_presenca()
-
-    id_disciplina = normalizar_id(id_disciplina)
-    emails_alvo = alunos_turma["Email_Pessoal"].astype(str).str.strip().str.lower().tolist()
-
-    df_calendario = _preparar_calendario(dfs_cache["calendario"].copy())
-    aulas = df_calendario[df_calendario["ID_Disc_Limpo"] == id_disciplina].copy()
-    if aulas.empty:
-        return pd.DataFrame(), pd.DataFrame()
-
-    emails_df = pd.DataFrame({"Email_Limpo": emails_alvo})
-    base = aulas.assign(_k=1).merge(emails_df.assign(_k=1), on="_k").drop(columns="_k")
-
-    meet = _preparar_meet(dfs_cache["bd"].copy())
-    meet = meet[meet["Email_Limpo"].isin(emails_alvo)]
-    matriz = base.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
-    matriz["Minutos"] = matriz["Minutos"].fillna(0)
-
-    ajustes = _preparar_ajustes(dfs_cache["ajustes"].copy())
-    ajustes = ajustes[ajustes["Email_Limpo"].isin(emails_alvo)]
-    matriz = _aplicar_status_presenca(matriz, ajustes)
-
     meta = alunos_turma.copy()
     meta["Email_Limpo"] = meta["Email_Pessoal"].astype(str).str.strip().str.lower()
     meta = meta.set_index("Email_Limpo")
@@ -279,3 +269,64 @@ def compilar_grid_frequencia(
             )
 
     return pd.DataFrame(resumo_rows), pd.DataFrame(grid_rows)
+
+
+def compilar_grid_frequencia(
+    id_disciplina: str,
+    alunos_turma: pd.DataFrame,
+    dfs_cache: dict | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Compila resumo e grid de frequência para todos os alunos de uma disciplina em lote.
+    Retorna (df_resumo, df_grid_detalhe).
+    """
+    if dfs_cache is None:
+        dfs_cache = carregar_base_presenca()
+
+    id_disciplina = normalizar_id(id_disciplina)
+    emails_alvo = alunos_turma["Email_Pessoal"].astype(str).str.strip().str.lower().tolist()
+
+    df_calendario = _preparar_calendario(dfs_cache["calendario"].copy())
+    aulas = df_calendario[df_calendario["ID_Disc_Limpo"] == id_disciplina].copy()
+    if aulas.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    emails_df = pd.DataFrame({"Email_Limpo": emails_alvo})
+    base = aulas.assign(_k=1).merge(emails_df.assign(_k=1), on="_k").drop(columns="_k")
+
+    meet = _preparar_meet(dfs_cache["bd"].copy())
+    meet = meet[meet["Email_Limpo"].isin(emails_alvo)]
+    matriz = base.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
+    matriz["Minutos"] = matriz["Minutos"].fillna(0)
+
+    ajustes = _preparar_ajustes(dfs_cache["ajustes"].copy())
+    ajustes = ajustes[ajustes["Email_Limpo"].isin(emails_alvo)]
+    matriz = _aplicar_status_presenca(matriz, ajustes)
+    return _compilar_grid_de_matriz(matriz, alunos_turma)
+
+
+def compilar_grid_dailies(
+    id_disciplina: str,
+    alunos_turma: pd.DataFrame,
+    dfs_cache: dict | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if dfs_cache is None:
+        dfs_cache = carregar_base_presenca()
+
+    id_disciplina = normalizar_id(id_disciplina)
+    emails_alvo = alunos_turma["Email_Pessoal"].astype(str).str.strip().str.lower().tolist()
+
+    df_calendario = _preparar_calendario(dfs_cache["calendario_dailies"].copy())
+    dailies = df_calendario[df_calendario["ID_Disc_Limpo"] == id_disciplina].copy()
+    if dailies.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    emails_df = pd.DataFrame({"Email_Limpo": emails_alvo})
+    base = dailies.assign(_k=1).merge(emails_df.assign(_k=1), on="_k").drop(columns="_k")
+
+    meet = _preparar_meet(dfs_cache["bd"].copy())
+    meet = meet[meet["Email_Limpo"].isin(emails_alvo)]
+    matriz = base.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
+    matriz["Minutos"] = matriz["Minutos"].fillna(0)
+    matriz = _aplicar_status_dailies(matriz)
+    return _compilar_grid_de_matriz(matriz, alunos_turma)

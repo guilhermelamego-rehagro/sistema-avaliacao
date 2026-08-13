@@ -21,7 +21,7 @@ from data.sheets import (
     planilha,
     preparar_ambiente_planilhas,
 )
-from domain.ciclos import obter_disciplina_ativa
+from domain.ciclos import indice_ciclo_padrao, obter_disciplina_ativa
 from domain.notas import calcular_nota_pares
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca, compilar_grid_frequencia
 from utils.logs import registrar_log, registrar_log_acesso
@@ -401,30 +401,7 @@ else:
         # INTELIGÊNCIA DE SELEÇÃO DO CICLO PADRÃO
         # ---------------------------------------------------------
         lista_nomes_ciclos = ciclos_disc['Nome_Ciclo'].tolist()
-        
-        # 1. Padrão de segurança: se nada for achado, seleciona o último ciclo cronológico
-        idx_padrao_boletim = len(lista_nomes_ciclos) - 1 if lista_nomes_ciclos else 0
-        
-        # 2. Critério A: Verificar se existe algum ciclo ativo hoje por data ou status
-        ciclo_hoje = ciclos_disc[(ciclos_disc['Status'].str.lower() == 'ativo') | 
-                                 ((hoje >= ciclos_disc['Data início']) & (hoje <= ciclos_disc['Data fim']))]
-        
-        if not ciclo_hoje.empty:
-            nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
-            if nome_ativo_hoje in lista_nomes_ciclos:
-                idx_padrao_boletim = lista_nomes_ciclos.index(nome_ativo_hoje)
-        else:
-            # 3. Critério B: Se nenhum está ativo hoje, busca o último ciclo cronológico que de fato possui avaliações recebidas para este aluno
-            recebidas_todas = df_aval[df_aval['Email_Avaliado'].str.lower().str.strip() == aluno['email']]
-            if not recebidas_todas.empty:
-                ids_com_nota = recebidas_todas['ID_Ciclo'].astype(str).str.strip().unique()
-                ciclos_com_nota = ciclos_disc[ciclos_disc['ID_Ciclo'].astype(str).str.strip().isin(ids_com_nota)]
-                if not ciclos_com_nota.empty:
-                    ultimo_ciclo_com_nota = ciclos_com_nota.iloc[-1]['Nome_Ciclo']
-                    if ultimo_ciclo_com_nota in lista_nomes_ciclos:
-                        idx_padrao_boletim = lista_nomes_ciclos.index(ultimo_ciclo_com_nota)
-
-        # Criamos o seletor com o index calculado de forma inteligente
+        idx_padrao_boletim = indice_ciclo_padrao(ciclos_disc, lista_nomes_ciclos)
         ciclo_boletim_sel = st.selectbox("Selecione o Ciclo para visualizar as notas:", lista_nomes_ciclos, index=idx_padrao_boletim)
         
         # Resgatamos a linha correspondente ao ciclo escolhido pelo usuário
@@ -508,31 +485,7 @@ else:
         # SUPORTE AO FILTRO "TODOS" + SELEÇÃO SE INICIANDO NO CICLO ATUAL
         # ---------------------------------------------------------
         opcoes_ciclos = ["Todos"] + lista_ciclos
-        idx_padrao_ciclo = 0 # Fallback caso falte dados
-        
-        try:
-            # Pega o dia de hoje sem fuso horário para bater com o padrão gravado
-            hoje_atual = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
-            df_ciclos_copy = ciclos_filtrados.copy()
-            
-            df_ciclos_copy['Data início'] = pd.to_datetime(df_ciclos_copy['Data início'], format='%d/%m/%Y', errors='coerce')
-            df_ciclos_copy['Data fim'] = pd.to_datetime(df_ciclos_copy['Data fim'], format='%d/%m/%Y', errors='coerce')
-            
-            cond_status = df_ciclos_copy['Status'].astype(str).str.lower().str.strip() == 'ativo'
-            cond_data = ((hoje_atual >= df_ciclos_copy['Data início']) & (hoje_atual <= df_ciclos_copy['Data fim']))
-            
-            ciclo_hoje = df_ciclos_copy[cond_status | cond_data]
-            if not ciclo_hoje.empty:
-                nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
-                if nome_ativo_hoje in lista_ciclos:
-                    idx_padrao_ciclo = opcoes_ciclos.index(nome_ativo_hoje)
-            else:
-                if lista_ciclos:
-                    # Se não há ciclo explícito hoje, pré-seleciona o último ciclo da lista
-                    idx_padrao_ciclo = len(opcoes_ciclos) - 1
-        except Exception:
-            idx_padrao_ciclo = 0
-            
+        idx_padrao_ciclo = indice_ciclo_padrao(ciclos_filtrados, lista_ciclos) + 1
         ciclo_sel = st.selectbox("Selecione o Ciclo:", opcoes_ciclos, index=idx_padrao_ciclo, key="geral_ciclo_sel")
         
         # Mapeamento do escopo de IDs de ciclos alvos baseados na seleção
@@ -722,29 +675,7 @@ else:
                 st.stop()
                 
             opcoes_ciclos_mod = ["Todos"] + lista_ciclos
-            idx_padrao_ciclo_mod = 0
-            
-            try:
-                hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).date()
-                df_ciclos_copy = ciclos_filtrados.copy()
-                for col in ['Data início', 'Data fim']:
-                    if col in df_ciclos_copy.columns:
-                        df_ciclos_copy[col] = pd.to_datetime(df_ciclos_copy[col], errors='coerce').dt.date
-                
-                cond_status = df_ciclos_copy['Status'].astype(str).str.lower().str.strip() == 'ativo' if 'Status' in df_ciclos_copy.columns else False
-                cond_data = ((hoje >= df_ciclos_copy['Data início']) & (hoje <= df_ciclos_copy['Data fim'])) if ('Data início' in df_ciclos_copy.columns and 'Data fim' in df_ciclos_copy.columns) else False
-                
-                ciclo_hoje = df_ciclos_copy[cond_status | cond_data]
-                if not ciclo_hoje.empty:
-                    nome_ativo_hoje = ciclo_hoje.iloc[0]['Nome_Ciclo']
-                    if nome_ativo_hoje in lista_ciclos:
-                        idx_padrao_ciclo_mod = opcoes_ciclos_mod.index(nome_ativo_hoje)
-                else:
-                    if lista_ciclos:
-                        idx_padrao_ciclo_mod = len(opcoes_ciclos_mod) - 1
-            except Exception:
-                idx_padrao_ciclo_mod = 0
-                
+            idx_padrao_ciclo_mod = indice_ciclo_padrao(ciclos_filtrados, lista_ciclos) + 1
             ciclo_sel = st.selectbox("Selecione o Ciclo:", opcoes_ciclos_mod, index=idx_padrao_ciclo_mod, key="mod_ciclo_sel")
             
             if ciclo_sel == "Todos":

@@ -58,19 +58,43 @@ def ordenar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def ciclo_padrao_nome(ciclos: pd.DataFrame, hoje: pd.Timestamp | None = None) -> str | None:
+    """Ciclo aberto hoje; senão o último encerrado; senão o próximo futuro."""
+    if ciclos is None or ciclos.empty:
+        return None
+    hoje = hoje or hoje_normalizado()
+    df = preparar_ciclos(ciclos)
+    if df.empty:
+        return None
+
+    aberto = df[(hoje >= df["Data início"]) & (hoje <= df["Data fim"])]
+    if not aberto.empty:
+        return str(ordenar_ciclos(aberto).iloc[0]["Nome_Ciclo"])
+
+    encerrados = df[df["Data fim"].notna() & (df["Data fim"] < hoje)]
+    if not encerrados.empty:
+        return str(encerrados.sort_values("Data fim").iloc[-1]["Nome_Ciclo"])
+
+    futuros = df[df["Data início"].notna() & (df["Data início"] > hoje)]
+    if not futuros.empty:
+        return str(futuros.sort_values("Data início").iloc[0]["Nome_Ciclo"])
+
+    if "Status" in df.columns:
+        ativos = df[df["Status"].astype(str).str.lower().str.strip() == "ativo"]
+        if not ativos.empty:
+            return str(ordenar_ciclos(ativos).iloc[0]["Nome_Ciclo"])
+
+    ordenado = ordenar_ciclos(df)
+    return str(ordenado.iloc[0]["Nome_Ciclo"]) if not ordenado.empty else None
+
+
 def indice_ciclo_padrao(ciclos: pd.DataFrame, nomes: list[str]) -> int:
     if not nomes:
         return 0
-    hoje = hoje_normalizado()
-    df = preparar_ciclos(ciclos)
-    ativo_status = df["Status"].astype(str).str.lower().str.strip() == "ativo"
-    ativo_data = (hoje >= df["Data início"]) & (hoje <= df["Data fim"])
-    ciclo_hoje = df[ativo_status | ativo_data]
-    if not ciclo_hoje.empty:
-        nome = str(ciclo_hoje.iloc[0]["Nome_Ciclo"])
-        if nome in nomes:
-            return nomes.index(nome)
-    return len(nomes) - 1
+    nome = ciclo_padrao_nome(ciclos)
+    if nome and nome in nomes:
+        return nomes.index(nome)
+    return 0
 
 
 def ciclo_inativo(id_ciclo: str) -> bool:

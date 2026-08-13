@@ -21,7 +21,7 @@ from data.sheets import (
     planilha,
     preparar_ambiente_planilhas,
 )
-from domain.ciclos import indice_ciclo_padrao, obter_disciplina_ativa
+from domain.ciclos import hoje_normalizado, indice_ciclo_padrao, obter_disciplina_ativa
 from domain.notas import calcular_nota_pares
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca, compilar_grid_frequencia
 from utils.disciplina import normalizar_id
@@ -168,7 +168,7 @@ else:
 
     menu = renderizar_sidebar(aluno, perfil)
 
-    hoje = pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
+    hoje = hoje_normalizado()
 
     if menu == ROTA_INICIO and perfil == "Aluno":
         home_aluno.render(aluno)

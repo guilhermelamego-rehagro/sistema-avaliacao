@@ -11,7 +11,8 @@ from data.sheets import ler_aba
 
 
 def hoje_normalizado() -> pd.Timestamp:
-    return pd.to_datetime(datetime.now(ZoneInfo("America/Sao_Paulo"))).normalize().tz_localize(None)
+    """Data civil em America/Sao_Paulo (evita pandas converter para UTC)."""
+    return pd.Timestamp(datetime.now(ZoneInfo("America/Sao_Paulo")).date())
 
 
 def obter_disciplina_ativa():

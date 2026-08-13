@@ -95,7 +95,8 @@ def _aplicar_status_presenca(matriz: pd.DataFrame, df_ajustes: pd.DataFrame) -> 
     if not df_ajustes.empty:
         df = df.merge(df_ajustes, on=["Email_Limpo", "Data_Str", "Chave_Disc"], how="left")
 
-    futuro = df["Data_Formatada"] > hoje
+    # Só apura no dia seguinte (aula ~22h BRT; script de presença a cada 4h).
+    pendente = df["Data_Formatada"] >= hoje
     invalido = df["Data_Formatada"].isna()
     tem_ajuste = (
         df["Novo_Status"].notna() & df["Novo_Status"].astype(str).str.strip().ne("")
@@ -108,14 +109,14 @@ def _aplicar_status_presenca(matriz: pd.DataFrame, df_ajustes: pd.DataFrame) -> 
 
     df.loc[invalido, "Status_Tecnico"] = "Erro"
     df.loc[invalido, "Status_Aluno"] = "Data Inválida"
-    df.loc[futuro & ~invalido, "Status_Tecnico"] = "Futuro"
-    df.loc[futuro & ~invalido, "Status_Aluno"] = "Agendada"
+    df.loc[pendente & ~invalido, "Status_Tecnico"] = "Futuro"
+    df.loc[pendente & ~invalido, "Status_Aluno"] = "Agendada"
 
     if tem_ajuste.any():
         df.loc[tem_ajuste, "Status_Tecnico"] = "Ajuste"
         df.loc[tem_ajuste, "Status_Aluno"] = df.loc[tem_ajuste, "Novo_Status"]
 
-    base = ~invalido & ~futuro & ~tem_ajuste
+    base = ~invalido & ~pendente & ~tem_ajuste
     df.loc[base & (df["Minutos"] >= MINUTOS_PRESENCA), "Status_Tecnico"] = "Presente"
     df.loc[base & (df["Minutos"] >= MINUTOS_PRESENCA), "Status_Aluno"] = "Presente"
     df.loc[base & (df["Minutos"] > 0) & (df["Minutos"] < MINUTOS_PRESENCA), "Status_Tecnico"] = "Conectado"
@@ -192,9 +193,9 @@ def calcular_matriz_dailies(email_aluno: str, dfs_cache: dict | None = None) -> 
         "Erro",
         "Data Inválida",
     ]
-    matriz.loc[matriz["Data_Formatada"] > hoje, "Status_Tecnico"] = "Futuro"
-    matriz.loc[matriz["Data_Formatada"] > hoje, "Status_Aluno"] = "Agendada"
-    passado = (matriz["Data_Formatada"] <= hoje) & matriz["Data_Formatada"].notna()
+    matriz.loc[matriz["Data_Formatada"] >= hoje, "Status_Tecnico"] = "Futuro"
+    matriz.loc[matriz["Data_Formatada"] >= hoje, "Status_Aluno"] = "Agendada"
+    passado = (matriz["Data_Formatada"] < hoje) & matriz["Data_Formatada"].notna()
     matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Tecnico"] = "Presente"
     matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Aluno"] = "Presente"
     matriz["Data"] = matriz["Data_Formatada"]

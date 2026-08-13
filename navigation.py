@@ -96,7 +96,10 @@ def rota_padrao(usuario: dict, perfil: str) -> str:
     if perfil == "Secretaria":
         return ROTA_FREQ_CONTROLE
     if perfil == "Professor":
-        return ROTA_LANCAR_BANCA
+        tipo = usuario.get("tipo_professor") or "Orientador"
+        if tipo == "Especialista":
+            return ROTA_LANCAR_BANCA
+        return ROTA_FREQ_CONTROLE
     return ROTA_INICIO
 
 
@@ -262,19 +265,24 @@ def renderizar_sidebar(usuario: dict, perfil: str) -> str:
         st.session_state["escolha_menu"] = padrao
 
     for secao in secoes:
-        if secao.titulo:
-            st.sidebar.markdown(f"**{secao.titulo}**")
-        for item in secao.itens:
-            ativo = item.rota == rota_atual
-            if st.sidebar.button(
-                item.rotulo,
-                key=f"nav_{item.rota}",
-                width="stretch",
-                type="primary" if ativo else "secondary",
-            ):
-                if item.rota != rota_atual:
-                    st.session_state["escolha_menu"] = item.rota
-                    st.rerun()
+        rotas_secao = {item.rota for item in secao.itens}
+        destino = (
+            st.sidebar.expander(secao.titulo, expanded=rota_atual in rotas_secao)
+            if secao.titulo
+            else st.sidebar.container()
+        )
+        with destino:
+            for item in secao.itens:
+                ativo = item.rota == rota_atual
+                if st.button(
+                    item.rotulo,
+                    key=f"nav_{item.rota}",
+                    width="stretch",
+                    type="primary" if ativo else "secondary",
+                ):
+                    if item.rota != rota_atual:
+                        st.session_state["escolha_menu"] = item.rota
+                        st.rerun()
 
     return rota_atual
 

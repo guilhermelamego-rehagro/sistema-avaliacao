@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 import streamlit as st
 
 from config import ICONE_STATUS_PRESENCA, MINUTOS_PRESENCA
 from data.sheets import ler_aba, ler_aba_frequencia
+from domain.ciclos import hoje_normalizado
 from utils.datas import parse_data_planilha_series
+from utils.disciplina import normalizar_id
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -27,14 +27,22 @@ def carregar_base_presenca() -> dict:
 def _preparar_entrancia(df_entrancia: pd.DataFrame) -> pd.DataFrame:
     df = df_entrancia.copy()
     df["Email_Limpo"] = df["Email_Pessoal"].astype(str).str.strip().str.lower()
-    df["ID_Disc_Limpo"] = df["ID_Disciplina"].astype(str).str.strip()
+    df["ID_Disc_Limpo"] = df["ID_Disciplina"].map(normalizar_id)
     return df
 
 
 def _preparar_calendario(df_calendario: pd.DataFrame) -> pd.DataFrame:
     df = df_calendario.copy()
-    df["ID_Disc_Limpo"] = df["ID_Disciplina"].astype(str).str.strip()
-    df["Data_Formatada"] = parse_data_planilha_series(df["Data"])
+    if "ID_Disciplina" not in df.columns:
+        df["ID_Disciplina"] = ""
+    if "Data" not in df.columns:
+        df["Data"] = ""
+    if "Disciplina" not in df.columns:
+        df["Disciplina"] = ""
+    df["ID_Disc_Limpo"] = df["ID_Disciplina"].map(normalizar_id)
+    df["Data_Formatada"] = pd.to_datetime(
+        parse_data_planilha_series(df["Data"]), errors="coerce"
+    ).dt.normalize()
     df["Chave_Disc"] = df["Disciplina"].astype(str).str.strip().str.lower()
     return df
 
@@ -79,8 +87,9 @@ def _preparar_ajustes(df_ajustes: pd.DataFrame) -> pd.DataFrame:
 
 
 def _aplicar_status_presenca(matriz: pd.DataFrame, df_ajustes: pd.DataFrame) -> pd.DataFrame:
-    hoje = datetime.now()
+    hoje = hoje_normalizado()
     df = matriz.copy()
+    df["Data_Formatada"] = pd.to_datetime(df["Data_Formatada"], errors="coerce").dt.normalize()
     df["Data_Str"] = df["Data_Formatada"].dt.strftime("%d/%m/%Y")
 
     if not df_ajustes.empty:
@@ -175,7 +184,8 @@ def calcular_matriz_dailies(email_aluno: str, dfs_cache: dict | None = None) -> 
     matriz = dailies.merge(meet, on=["Email_Limpo", "Data_Formatada", "Chave_Disc"], how="left")
     matriz["Minutos"] = matriz["Minutos"].fillna(0)
 
-    hoje = datetime.now()
+    hoje = hoje_normalizado()
+    matriz["Data_Formatada"] = pd.to_datetime(matriz["Data_Formatada"], errors="coerce").dt.normalize()
     matriz["Status_Tecnico"] = "Falta"
     matriz["Status_Aluno"] = "Falta"
     matriz.loc[matriz["Data_Formatada"].isna(), ["Status_Tecnico", "Status_Aluno"]] = [
@@ -183,7 +193,7 @@ def calcular_matriz_dailies(email_aluno: str, dfs_cache: dict | None = None) -> 
         "Data Inválida",
     ]
     matriz.loc[matriz["Data_Formatada"] > hoje, "Status_Tecnico"] = "Futuro"
-    matriz.loc[matriz["Data_Formatada"] > hoje, "Status_Aluno"] = "A agendar"
+    matriz.loc[matriz["Data_Formatada"] > hoje, "Status_Aluno"] = "Agendada"
     passado = (matriz["Data_Formatada"] <= hoje) & matriz["Data_Formatada"].notna()
     matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Tecnico"] = "Presente"
     matriz.loc[passado & (matriz["Minutos"] > 0), "Status_Aluno"] = "Presente"
@@ -203,7 +213,7 @@ def compilar_grid_frequencia(
     if dfs_cache is None:
         dfs_cache = carregar_base_presenca()
 
-    id_disciplina = str(id_disciplina).strip()
+    id_disciplina = normalizar_id(id_disciplina)
     emails_alvo = alunos_turma["Email_Pessoal"].astype(str).str.strip().str.lower().tolist()
 
     df_calendario = _preparar_calendario(dfs_cache["calendario"].copy())
@@ -253,13 +263,16 @@ def compilar_grid_frequencia(
             }
         )
 
-        for _, row in vivido.iterrows():
+        for _, row in grupo.sort_values("Data").iterrows():
+            data_ref = row.get("Data")
+            if pd.isna(data_ref):
+                continue
             icone = ICONE_STATUS_PRESENCA.get(row["Status_Tecnico"], "-")
             grid_rows.append(
                 {
                     "Email_Cru": aluno["Email_Pessoal"],
-                    "Data_Visual": row["Data"].strftime("%d/%m"),
-                    "Data_Sort": row["Data"],
+                    "Data_Visual": pd.Timestamp(data_ref).strftime("%d/%m"),
+                    "Data_Sort": data_ref,
                     "Status": icone,
                 }
             )

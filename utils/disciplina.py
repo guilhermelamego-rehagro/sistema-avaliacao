@@ -3,6 +3,20 @@
 import pandas as pd
 
 
+def normalizar_id(valor) -> str:
+    """Evita '1' != 1 e '1.0' != '1' ao cruzar planilhas."""
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return ""
+    texto = str(valor).strip()
+    if texto.lower() in {"", "nan", "none"}:
+        return ""
+    if texto.endswith(".0"):
+        base = texto[:-2]
+        if base.isdigit():
+            return base
+    return texto
+
+
 def indice_disciplina_ativa(df_disc: pd.DataFrame, lista_nomes: list[str]) -> int:
     if df_disc.empty or not lista_nomes:
         return 0

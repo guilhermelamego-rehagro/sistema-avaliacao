@@ -121,4 +121,5 @@ ICONE_STATUS_PRESENCA = {
     "Falta": "❌",
     "Conectado": "⏳",
     "Ajuste": "✏️",
+    "Futuro": "📅",
 }

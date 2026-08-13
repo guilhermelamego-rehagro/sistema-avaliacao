@@ -24,6 +24,7 @@ from data.sheets import (
 from domain.ciclos import indice_ciclo_padrao, obter_disciplina_ativa
 from domain.notas import calcular_nota_pares
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca, compilar_grid_frequencia
+from utils.disciplina import normalizar_id
 from utils.logs import registrar_log, registrar_log_acesso
 from navigation import (
     LEGACY_ROUTES,
@@ -810,44 +811,49 @@ else:
                 st.stop()
             raise
         
-        # Filtra para mostrar APENAS os dados da disciplina ativa
         if not df_frequencia.empty and id_ativa:
-            df_frequencia = df_frequencia[df_frequencia['ID_Disciplina'] == id_ativa]
-            
+            df_frequencia = df_frequencia[
+                df_frequencia["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_ativa)
+            ]
+
         if df_frequencia.empty:
             st.warning("Nenhum calendário de aulas configurado para esta disciplina atual.")
         else:
-            df_vivido = df_frequencia[df_frequencia['Status_Tecnico'] != 'Futuro']
-            df_futuro = df_frequencia[df_frequencia['Status_Tecnico'] == 'Futuro']
-            
+            df_frequencia = df_frequencia.sort_values("Data")
+            df_vivido = df_frequencia[df_frequencia["Status_Tecnico"] != "Futuro"]
+            df_futuro = df_frequencia[df_frequencia["Status_Tecnico"] == "Futuro"]
+
             total_vivido = len(df_vivido)
-            presencas_vividas = len(df_vivido[df_vivido['Status_Aluno'] == 'Presente'])
+            presencas_vividas = len(df_vivido[df_vivido["Status_Aluno"] == "Presente"])
             pct_atual = (presencas_vividas / total_vivido * 100) if total_vivido > 0 else 100.0
-            
+
             total_geral = len(df_frequencia)
             presencas_projetadas = presencas_vividas + len(df_futuro)
             pct_projetada = (presencas_projetadas / total_geral * 100) if total_geral > 0 else 100.0
-            
+
             c1, c2, c3 = st.columns(3)
             c1.metric("Frequência Atual (Realizada)", f"{pct_atual:.1f}%")
             c2.metric("Frequência Projetada*", f"{pct_projetada:.1f}%")
-            
-            if pct_projetada < 75.0: 
+
+            if pct_projetada < 75.0:
                 c3.error("⚠️ Risco de Reprovação (< 75%)")
-            else: 
+            else:
                 c3.success("✅ Situação Regular")
-            
+
             st.caption("ℹ️ *A frequência projetada considera uma presença em 100% das próximas aulas.*")
-                
-            st.subheader("📋 Histórico Detalhado")
-            df_visao = df_vivido[['Data', 'Status_Aluno']].copy()
-            df_visao['Data'] = df_visao['Data'].dt.strftime('%d/%m/%Y')
-            
-            # Adiciona os Emojis visualmente limpos
-            df_visao['Situação'] = df_visao['Status_Aluno'].apply(lambda x: "✅ Presente" if x == "Presente" else "❌ Falta")
-            
-            # Mantém apenas as colunas Data e Situação (Remove Minutos e Disciplina)
-            st.dataframe(df_visao[['Data', 'Situação']], width="stretch", hide_index=True)
+
+            st.subheader("📋 Calendário de aulas")
+            df_visao = df_frequencia[["Data", "Status_Aluno"]].copy()
+            df_visao["Data"] = pd.to_datetime(df_visao["Data"], errors="coerce").dt.strftime("%d/%m/%Y")
+            df_visao["Situação"] = df_visao["Status_Aluno"].map(
+                {
+                    "Presente": "✅ Presente",
+                    "Falta": "❌ Falta",
+                    "Agendada": "📅 Agendada",
+                    "Ajuste": "✏️ Ajuste",
+                }
+            ).fillna("❌ Falta")
+            st.dataframe(df_visao[["Data", "Situação"]], width="stretch", hide_index=True)
 
     # =========================================================
     # NOVAS TELAS: MINHAS DAILIES (ALUNO)
@@ -870,36 +876,46 @@ else:
             raise
         
         if not df_dailies.empty and id_ativa:
-            df_dailies = df_dailies[df_dailies['ID_Disciplina'] == id_ativa]
-            
+            df_dailies = df_dailies[
+                df_dailies["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_ativa)
+            ]
+
         if df_dailies.empty:
             st.warning("Nenhuma Daily agendada para esta disciplina atual.")
         else:
-            df_vivido = df_dailies[df_dailies['Status_Tecnico'] != 'Futuro']
-            df_futuro = df_dailies[df_dailies['Status_Tecnico'] == 'Futuro']
-            
+            df_dailies = df_dailies.sort_values("Data")
+            df_vivido = df_dailies[df_dailies["Status_Tecnico"] != "Futuro"]
+            df_futuro = df_dailies[df_dailies["Status_Tecnico"] == "Futuro"]
+
             total_vivido = len(df_vivido)
-            pontos = len(df_vivido[df_vivido['Status_Aluno'] == 'Presente'])
+            pontos = len(df_vivido[df_vivido["Status_Aluno"] == "Presente"])
             pct_atual = (pontos / total_vivido * 100) if total_vivido > 0 else 100.0
-            
+
             total_geral = len(df_dailies)
             pontos_projetados = pontos + len(df_futuro)
             pct_projetada = (pontos_projetados / total_geral * 100) if total_geral > 0 else 100.0
-            
+
             c1, c2, c3 = st.columns(3)
             c1.metric("Nota Atual de Dailies", f"{pct_atual:.1f}%")
             c2.metric("Projeção de Nota Dailies*", f"{pct_projetada:.1f}%")
-            if pct_projetada < 75.0: c3.error("⚠️ Baixa Participação")
-            else: c3.success("✅ Ótima Participação")
+            if pct_projetada < 75.0:
+                c3.error("⚠️ Baixa Participação")
+            else:
+                c3.success("✅ Ótima Participação")
 
             st.caption("ℹ️ *A nota projetada considera uma presença em 100% das próximas reuniões de orientação de projetos.*")
-            
-            st.subheader("📋 Histórico")
-            df_visao = df_vivido[['Data', 'Status_Aluno']].copy()
-            df_visao['Data'] = df_visao['Data'].dt.strftime('%d/%m/%Y')
-            df_visao['Presença Reunião'] = df_visao['Status_Aluno'].apply(lambda x: "✅ Participou" if x == "Presente" else "❌ Faltou")
-            
-            st.dataframe(df_visao[['Data', 'Presença Reunião']], width="stretch", hide_index=True)
+
+            st.subheader("📋 Calendário de dailies")
+            df_visao = df_dailies[["Data", "Status_Aluno"]].copy()
+            df_visao["Data"] = pd.to_datetime(df_visao["Data"], errors="coerce").dt.strftime("%d/%m/%Y")
+            df_visao["Presença Reunião"] = df_visao["Status_Aluno"].map(
+                {
+                    "Presente": "✅ Participou",
+                    "Falta": "❌ Faltou",
+                    "Agendada": "📅 Agendada",
+                }
+            ).fillna("❌ Faltou")
+            st.dataframe(df_visao[["Data", "Presença Reunião"]], width="stretch", hide_index=True)
 
     # =========================================================
     # NOVAS TELAS: CONTROLE DE FREQUÊNCIA (PROFESSOR & SECRETARIA)
@@ -923,8 +939,9 @@ else:
         disc_sel = st.selectbox("Selecione a Disciplina para análise:", lista_opcoes, index=idx_ativo)
         id_disciplina_sel = disc_sel.split(" - ")[0]
         
-        # Filtra os alunos da disciplina e traz a coluna Turma_Ingresso
-        alunos_turma = df_entrancia[df_entrancia['ID_Disciplina'] == id_disciplina_sel].copy()
+        alunos_turma = df_entrancia[
+            df_entrancia["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disciplina_sel)
+        ].copy()
         alunos_turma = pd.merge(alunos_turma, df_alunos_base[['Email_Pessoal', 'Turma_Ingresso']], on='Email_Pessoal', how='left')
 
         with st.spinner("Compilando frequência..."):
@@ -999,7 +1016,7 @@ else:
                     "% Realizado": st.column_config.NumberColumn("% Realizado", format="%.1f %%"),
                     "% Projetado": st.column_config.NumberColumn("% Projetado", format="%.1f %%")
                 }
-                st.caption("Legenda na tela: ✅ Presente | ❌ Falta | ⏳ Conectado (<30min) | ✏️ Ajuste Manual")
+                st.caption("Legenda na tela: ✅ Presente | ❌ Falta | ⏳ Conectado (<30min) | ✏️ Ajuste Manual | 📅 Aula futura")
                 st.dataframe(df_final, width="stretch", column_config=config_colunas)
         else:
             st.info("Nenhuma aula registrada ainda para esta disciplina.")

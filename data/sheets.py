@@ -31,7 +31,7 @@ ESCOPO = [
 ]
 
 _CACHE_TTL = 900
-_COLUNAS_TEXTO = ("Sala", "Grupo", "Turma", "Turma_Ingresso")
+_COLUNAS_TEXTO = ("Sala", "Grupo", "Turma", "Turma_Ingresso", "ID_Disciplina", "ID_Ciclo")
 
 
 def _valor_celula_texto(valor) -> str:

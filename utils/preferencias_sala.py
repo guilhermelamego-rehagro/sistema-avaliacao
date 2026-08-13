@@ -1,52 +1,10 @@
-"""Lembra a última sala usada por professoras orientadoras."""
+"""Mantém, em cada tela, o último filtro de sala usado na sessão."""
 
 from __future__ import annotations
 
 import streamlit as st
 
-from auth.supabase_auth import cliente_admin, professor_e_orientador, usuario_e_coordenador
 from utils.ordenacao import ordenar_grupos_lista
-
-_CHAVE = "pref_sala"
-
-
-def _orientadora_exclusiva(usuario: dict) -> bool:
-    return (
-        usuario.get("perfil") == "Professor"
-        and professor_e_orientador(usuario)
-        and not usuario_e_coordenador(usuario)
-    )
-
-
-def _deve_lembrar(usuario: dict) -> bool:
-    return _orientadora_exclusiva(usuario)
-
-
-def sala_lembrada(usuario: dict) -> str:
-    valor = st.session_state.get(_CHAVE) or usuario.get("ultima_sala") or ""
-    return str(valor).strip()
-
-
-def lembrar_sala(usuario: dict, sala: str | None):
-    if not _deve_lembrar(usuario):
-        return
-    sala = str(sala or "").strip()
-    if not sala or sala == "Todas":
-        return
-    if sala_lembrada(usuario) == sala:
-        st.session_state[_CHAVE] = sala
-        return
-    st.session_state[_CHAVE] = sala
-    usuario["ultima_sala"] = sala
-    user_id = usuario.get("id")
-    if not user_id:
-        return
-    try:
-        cliente_admin().auth.admin.update_user_by_id(
-            user_id, {"user_metadata": {"ultima_sala": sala}}
-        )
-    except Exception:
-        pass
 
 
 def selectbox_sala(
@@ -54,37 +12,23 @@ def selectbox_sala(
     salas: list,
     *,
     key: str,
-    usuario: dict,
+    usuario: dict | None = None,
     incluir_todas: bool = True,
 ) -> str:
     salas = ordenar_grupos_lista([str(s).strip() for s in salas if str(s).strip()])
     opcoes = (["Todas"] + salas) if incluir_todas else salas
     if not opcoes:
         return "Todas" if incluir_todas else ""
-    pref = sala_lembrada(usuario)
-    if key not in st.session_state:
-        if pref in salas:
-            st.session_state[key] = pref
-        elif incluir_todas:
-            st.session_state[key] = "Todas"
-        else:
-            st.session_state[key] = salas[0]
-    atual = st.session_state.get(key)
-    if atual not in opcoes:
-        st.session_state[key] = pref if pref in salas else opcoes[0]
-    escolhido = st.selectbox(label, opcoes, key=key)
-    lembrar_sala(usuario, escolhido)
-    return escolhido
+    if key in st.session_state and st.session_state[key] not in opcoes:
+        del st.session_state[key]
+    return st.selectbox(label, opcoes, key=key)
 
 
-def multiselect_sala(salas: list, *, key: str, usuario: dict) -> list[str]:
+def multiselect_sala(salas: list, *, key: str, usuario: dict | None = None) -> list[str]:
     salas = ordenar_grupos_lista([str(s).strip() for s in salas if str(s).strip()])
-    pref = sala_lembrada(usuario)
-    if key not in st.session_state:
-        st.session_state[key] = [pref] if pref in salas else []
-    atual = [s for s in st.session_state.get(key, []) if s in salas]
-    st.session_state[key] = atual
-    escolhido = st.multiselect("Filtrar por Sala:", salas, key=key)
-    if len(escolhido) == 1:
-        lembrar_sala(usuario, escolhido[0])
-    return escolhido
+    if key in st.session_state:
+        atual = st.session_state.get(key) or []
+        if not isinstance(atual, list):
+            atual = [atual] if atual else []
+        st.session_state[key] = [s for s in atual if s in salas]
+    return st.multiselect("Filtrar por Sala:", salas, key=key)

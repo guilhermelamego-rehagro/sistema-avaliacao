@@ -21,6 +21,8 @@ __all__ = [
     "garantir_aba_frequencia",
     "ler_aba",
     "ler_aba_frequencia",
+    "salvar_aba",
+    "salvar_aba_frequencia",
     "limpar_cache_planilhas",
     "texto_planilha",
 ]
@@ -223,6 +225,54 @@ def ler_aba_frequencia(nome_aba: str) -> pd.DataFrame:
     df = pd.DataFrame(registros).copy()
     df.columns = df.columns.astype(str).str.strip()
     return _normalizar_colunas_texto(df)
+
+
+def salvar_aba(nome_aba: str, df: pd.DataFrame, colunas: list[str] | None = None):
+    """Substitui o conteúdo da aba (cabeçalho + linhas), no mesmo ID da planilha."""
+    ws = planilha.worksheet(nome_aba)
+    out = df.copy()
+    if colunas:
+        for col in colunas:
+            if col not in out.columns:
+                out[col] = ""
+        out = out[colunas]
+    else:
+        colunas = [str(c) for c in out.columns]
+
+    linhas = []
+    if not out.empty:
+        limpo = out.fillna("").astype(str).replace({"nan": "", "None": "", "<NA>": ""})
+        linhas = limpo.values.tolist()
+
+    _requisitar_com_retry(ws.clear)
+    _requisitar_com_retry(ws.update, range_name="A1", values=[colunas] + linhas)
+    limpar_cache_planilhas()
+
+
+def salvar_aba_frequencia(nome_aba: str, df: pd.DataFrame, colunas: list[str] | None = None):
+    """Substitui o conteúdo de uma aba da planilha de frequência."""
+    if nome_aba in ABAS_FREQUENCIA:
+        garantir_aba_frequencia(nome_aba)
+    ws = _worksheet_frequencia(nome_aba)
+    out = df.copy()
+    if colunas:
+        for col in colunas:
+            if col not in out.columns:
+                out[col] = ""
+        extras = [c for c in out.columns if c not in colunas]
+        out = out[colunas + extras]
+        colunas = list(out.columns)
+    else:
+        colunas = [str(c) for c in out.columns]
+
+    linhas = []
+    if not out.empty:
+        limpo = out.fillna("").astype(str).replace({"nan": "", "None": "", "<NA>": ""})
+        linhas = limpo.values.tolist()
+
+    _requisitar_com_retry(ws.clear)
+    _requisitar_com_retry(ws.update, range_name="A1", values=[colunas] + linhas)
+    limpar_cache_planilhas()
 
 
 def limpar_cache_planilhas():

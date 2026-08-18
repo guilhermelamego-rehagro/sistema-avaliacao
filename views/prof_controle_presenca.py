@@ -100,7 +100,7 @@ def render(usuario: dict, tipo: str = "aulas"):
         sala_filtro = multiselect_sala(salas_opcoes, key=f"presenca_sala_{tipo}", usuario=usuario)
     grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes, key=f"presenca_grupo_{tipo}")
 
-    c4, c5 = st.columns(2)
+    c4, c5, c6 = st.columns([2, 2, 1.4])
     nome_busca = c4.text_input("Buscar por Nome do Aluno:", key=f"presenca_nome_{tipo}")
     faixa_projetada = c5.slider(
         "Filtrar por % Projetada:",
@@ -109,6 +109,32 @@ def render(usuario: dict, tipo: str = "aulas"):
         value=(0.0, 100.0),
         format="%.0f%%",
         key=f"presenca_faixa_{tipo}",
+    )
+    filtro_seguidas = c6.checkbox(
+        "2 ou mais faltas seguidas",
+        value=False,
+        key=f"presenca_seguidas_{tipo}",
+        help=(
+            "Mostra só quem está com 2 ou mais faltas consecutivas "
+            "nas últimas aulas/dailies já realizadas desta modalidade. "
+            "Conexão abaixo de 30 min conta como falta."
+        ),
+    )
+
+    opcao_todas = "(todas as datas)"
+    mapa_datas: dict[str, pd.Timestamp] = {}
+    for _, row_data in datas_unicas.iterrows():
+        data_ref = pd.Timestamp(row_data["Data_Sort"]).normalize()
+        rotulo = data_ref.strftime("%d/%m/%Y")
+        mapa_datas[rotulo] = data_ref
+    data_falta = st.selectbox(
+        "Faltantes em uma data:",
+        [opcao_todas] + list(mapa_datas.keys()),
+        key=f"presenca_data_falta_{tipo}",
+        help=(
+            "Lista só quem faltou na data escolhida. "
+            "Conexão abaixo de 30 min conta como falta."
+        ),
     )
 
     if turma_filtro:
@@ -124,13 +150,44 @@ def render(usuario: dict, tipo: str = "aulas"):
         (df_final["% Projetado"] >= faixa_projetada[0])
         & (df_final["% Projetado"] <= faixa_projetada[1])
     ]
+    if filtro_seguidas:
+        df_final = df_final[df_final["Faltas seguidas"] >= 2]
+    if data_falta != opcao_todas:
+        data_ref = mapa_datas[data_falta]
+        df_dia = df_raw.copy()
+        df_dia["Data_Norm"] = pd.to_datetime(df_dia["Data_Sort"], errors="coerce").dt.normalize()
+        emails_faltaram = df_dia[
+            (df_dia["Data_Norm"] == data_ref)
+            & (df_dia["Status"].isin(["❌", "⏳"]))
+        ]["Email_Cru"]
+        df_final = df_final[df_final["Email_Cru"].isin(emails_faltaram)]
 
     if df_final.empty:
-        st.warning("Nenhum aluno encontrado com esses filtros.")
+        if data_falta != opcao_todas:
+            aviso = f"Nenhum aluno faltou em {data_falta} com os filtros atuais."
+        elif filtro_seguidas:
+            aviso = "Nenhum aluno com 2 ou mais faltas seguidas nesta modalidade."
+        else:
+            aviso = "Nenhum aluno encontrado com esses filtros."
+        st.warning(aviso)
         return
 
+    if data_falta != opcao_todas:
+        st.warning(
+            f"**{len(df_final)}** aluno(s) faltaram em **{data_falta}** "
+            f"{'nas dailies' if eh_dailies else 'nas aulas'}."
+        )
+    if filtro_seguidas:
+        st.warning(
+            f"**{len(df_final)}** aluno(s) com 2 ou mais faltas seguidas "
+            f"{'nas dailies' if eh_dailies else 'nas aulas'} — priorize a abordagem."
+        )
+        df_final = df_final.sort_values(["Faltas seguidas", "Nome"], ascending=[False, True])
+    else:
+        df_final = df_final.sort_values("Nome")
+
     df_final = df_final.set_index("Nome")
-    cols_fixas = ["Turma", "Sala", "Grupo", "% Realizado", "% Projetado"]
+    cols_fixas = ["Turma", "Sala", "Grupo", "% Realizado", "% Projetado", "Faltas seguidas"]
     cols_finais = cols_fixas + [c for c in colunas_datas_ordenadas if c in df_final.columns]
     df_final = df_final[cols_finais]
 
@@ -152,12 +209,22 @@ def render(usuario: dict, tipo: str = "aulas"):
     config_colunas = {
         "% Realizado": st.column_config.NumberColumn("% Realizado", format="%.1f %%"),
         "% Projetado": st.column_config.NumberColumn("% Projetado", format="%.1f %%"),
+        "Faltas seguidas": st.column_config.NumberColumn(
+            "Faltas seguidas",
+            help="Faltas consecutivas nas últimas sessões já realizadas.",
+            format="%d",
+        ),
     }
     if eh_dailies:
-        st.caption("Legenda: ✅ Participou | ❌ Faltou | 📅 Daily futura")
+        st.caption(
+            "Legenda: ✅ Participou | ❌ Faltou | 📅 Daily futura. "
+            "**Faltas seguidas** conta só as últimas dailies já realizadas."
+        )
     else:
         st.caption(
             "Legenda na tela: ✅ Presente | ❌ Falta | ⏳ Conectado (<30min) | "
-            "✏️ Ajuste Manual | 📅 Aula futura"
+            "✏️ Ajuste Manual | 📅 Aula futura. "
+            "**Faltas seguidas** conta só as últimas aulas já realizadas "
+            "(conexão < 30 min entra como falta)."
         )
     st.dataframe(df_final, width="stretch", column_config=config_colunas)

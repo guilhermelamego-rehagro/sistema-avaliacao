@@ -46,8 +46,7 @@ def render(usuario: dict):
         )
     else:
         st.caption(
-            "A nota final parcial ainda não foi liberada pelo orientador. "
-            "Abaixo, o detalhamento por componente."
+            "A nota final ainda não foi calculada. Abaixo, o detalhamento por componente."
         )
 
     st.subheader("Detalhamento por componente")

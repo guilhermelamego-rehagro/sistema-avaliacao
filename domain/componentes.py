@@ -141,10 +141,12 @@ def salvar_componentes_disciplina(id_disciplina: str, df_novos: pd.DataFrame) ->
         return f"A soma dos pesos deve ser 100%. Atual: {peso_total:.1f}%"
 
     ciclos_tipos = df_save[df_save["Tipo"].isin(["Ciclo", "Entrega_Final"])]
-    sem_vinculo = ciclos_tipos[ciclos_tipos["ID_Ciclo"].astype(str).str.strip() == ""]
-    if not sem_vinculo.empty:
-        nomes = ", ".join(sem_vinculo["Nome"].tolist())
-        return f"Componentes do tipo Ciclo/Entrega final precisam de vínculo com ID_Ciclo: {nomes}"
+    for _, row in ciclos_tipos.iterrows():
+        tipo = str(row["Tipo"]).strip()
+        id_ciclo = str(row["ID_Ciclo"]).strip()
+        nome = str(row["Nome"]).strip()
+        if tipo == "Ciclo" and not id_ciclo:
+            return f"Componentes do tipo Ciclo precisam de vínculo com ID_Ciclo: {nome}"
 
     try:
         df_todos = ler_aba("Config_Componentes")

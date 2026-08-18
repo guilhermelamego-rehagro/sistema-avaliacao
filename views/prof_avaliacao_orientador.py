@@ -11,6 +11,7 @@ from domain.avaliacoes import (
     salvar_avaliacao_orientador,
 )
 from domain.ciclos import ordenar_ciclos
+from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.preferencias_sala import selectbox_sala
@@ -134,7 +135,7 @@ def render(usuario: dict):
 
     df_ciclos = ler_aba("Ciclos")
     ciclos = df_ciclos[df_ciclos["ID_Disciplina"].astype(str).str.strip() == id_disc]
-    ciclos = ordenar_ciclos(ciclos)
+    ciclos = ordenar_ciclos(ciclos_visiveis_avaliacao(ciclos, id_disc))
     if ciclos.empty:
         st.warning("Nenhum ciclo cadastrado.")
         return

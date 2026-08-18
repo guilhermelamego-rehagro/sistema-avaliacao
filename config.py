@@ -71,6 +71,24 @@ ABAS_AVALIACAO = {
         "Email_Responsavel",
         "Nome_Responsavel",
     ],
+    "Encontro_Presencial_Datas": [
+        "ID_Disciplina",
+        "Data",
+        "Descricao",
+        "Ativo",
+    ],
+    "Presenca_Encontro": [
+        "ID_Disciplina",
+        "Data",
+        "Email_Aluno",
+        "Nome_Aluno",
+        "Sala",
+        "Grupo",
+        "Status",
+        "Email_Lancador",
+        "Nome_Lancador",
+        "Data_Lancamento",
+    ],
 }
 
 # Aba nova na planilha de frequência
@@ -87,16 +105,25 @@ ABAS_FREQUENCIA = {
     ],
 }
 
-# Pesos padrão (usados se Config_Componentes estiver vazia)
+# Modelo padrão ao cadastrar disciplina (4 ciclos + entrega final + dailies + atividades)
 PESOS_PADRAO = [
     ("Ciclo 1", 7.5, 1),
     ("Ciclo 2", 7.5, 2),
     ("Ciclo 3", 7.5, 3),
     ("Ciclo 4", 7.5, 4),
     ("Entrega Final", 50.0, 5),
-    ("Dailies", 10.0, 6),
-    ("Atividades Canvas", 10.0, 7),
+    ("Reuniões diárias", 10.0, 6),
+    ("Atividades individuais", 10.0, 7),
 ]
+
+CICLOS_PADRAO = [
+    ("Ciclo 1", 1),
+    ("Ciclo 2", 2),
+    ("Ciclo 3", 3),
+    ("Ciclo 4", 4),
+]
+
+CICLO_ENTREGA_FINAL = ("Entrega Final", 5)
 
 TIPOS_COMPONENTE = [
     "Ciclo",

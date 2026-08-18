@@ -22,10 +22,13 @@ def render(usuario: dict):
         "e o **peso**. A soma dos pesos deve ser **100%**."
     )
     st.info(
-        "**Entrega Final:** se o componente for do tipo *Entrega Final* e estiver vinculado ao mesmo "
-        "**ID_Ciclo** de um ciclo já avaliado (ex.: Ciclo 4), o sistema reutiliza automaticamente as "
-        "notas de grupo, pares e orientador daquele ciclo. Use um ciclo diferente apenas quando quiser "
-        "uma avaliação separada (ex.: encontro presencial)."
+        "**Ciclo e Entrega final** usam a mesma fórmula: "
+        "orientador (60%) + pares (40%), multiplicado pela nota do grupo.\n\n"
+        "O comportamento da **Entrega final** depende da disciplina:\n"
+        "- **Sem avaliação própria:** grupo, pares e orientador são os do último ciclo "
+        "(em geral o Ciclo 4).\n"
+        "- **Com encontro presencial e avaliação própria:** vincule a um ciclo **próprio**. "
+        "Essa opção é perguntada ao ativar a disciplina com encontro presencial."
     )
 
     df_disc = ler_aba("Disciplinas")

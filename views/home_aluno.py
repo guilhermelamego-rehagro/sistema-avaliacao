@@ -26,7 +26,12 @@ def _render_card(tarefa: ResumoTarefa, rota: str):
         else:
             st.write(tarefa.mensagem)
         if tarefa.status == "pendente":
-            if st.button(f"Ir para {tarefa.titulo}", key=f"home_btn_{rota}", width="stretch"):
+            if st.button(
+                f"Ir para {tarefa.titulo}",
+                key=f"home_btn_{rota}",
+                type="primary",
+                width="stretch",
+            ):
                 ir_para(rota)
 
 
@@ -46,5 +51,6 @@ def render(usuario: dict):
     _render_card(status_avaliacao_curso(email), ROTA_CURSO_AVALIAR)
 
     st.caption(
-        "Consulte frequência, dailies e notas em **Meu desempenho e participação**, no menu à esquerda."
+        "Consulte frequência, dailies, comentários da banca e notas em "
+        "**Meu desempenho e participação**, no menu à esquerda."
     )

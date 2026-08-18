@@ -15,10 +15,19 @@ from utils.disciplina import normalizar_id
 @st.cache_data(ttl=900, show_spinner=False)
 def carregar_base_presenca() -> dict:
     """Carrega de uma vez as abas usadas em frequência e dailies (cache compartilhado)."""
+    calendario = ler_aba_frequencia("Calendario_Aulas")
+    try:
+        from domain.encontro_presencial import datas_encontro_para_calendario
+
+        extra = datas_encontro_para_calendario(calendario)
+        if extra is not None and not extra.empty:
+            calendario = pd.concat([calendario, extra], ignore_index=True)
+    except Exception:
+        pass
     return {
         "bd": ler_aba_frequencia("BD_Presenca"),
         "ajustes": ler_aba_frequencia("Ajustes_Presenca"),
-        "calendario": ler_aba_frequencia("Calendario_Aulas"),
+        "calendario": calendario,
         "calendario_dailies": ler_aba_frequencia("Calendario_Dailies"),
         "entrancia": ler_aba("Entrancia_Turma"),
     }
@@ -271,6 +280,28 @@ def _aplicar_status_dailies(matriz: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def sequencia_faltas(status_aluno: pd.Series) -> tuple[int, int]:
+    """Retorna (sequência atual no fim, maior sequência) de faltas consecutivas."""
+    faltou = status_aluno.astype(str).str.strip().eq("Falta").tolist()
+    if not faltou:
+        return 0, 0
+    max_seq = atual = 0
+    for item in faltou:
+        if item:
+            atual += 1
+            if atual > max_seq:
+                max_seq = atual
+        else:
+            atual = 0
+    atual_fim = 0
+    for item in reversed(faltou):
+        if item:
+            atual_fim += 1
+        else:
+            break
+    return atual_fim, max_seq
+
+
 def _compilar_grid_de_matriz(
     matriz: pd.DataFrame, alunos_turma: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -287,12 +318,15 @@ def _compilar_grid_de_matriz(
         aluno = meta.loc[email]
         if isinstance(aluno, pd.DataFrame):
             aluno = aluno.iloc[0]
-        vivido = grupo[grupo["Status_Tecnico"] != "Futuro"]
+        vivido = grupo[
+            ~grupo["Status_Tecnico"].isin(["Futuro", "Erro"])
+        ].sort_values("Data")
         futuro = grupo[grupo["Status_Tecnico"] == "Futuro"]
         pres = len(vivido[vivido["Status_Aluno"] == "Presente"])
         total_vivido = len(vivido)
         pct_real = (pres / total_vivido * 100) if total_vivido > 0 else 100.0
         pct_proj = ((pres + len(futuro)) / len(grupo) * 100) if len(grupo) > 0 else 100.0
+        seguidas, _max_seguidas = sequencia_faltas(vivido["Status_Aluno"])
 
         resumo_rows.append(
             {
@@ -303,6 +337,7 @@ def _compilar_grid_de_matriz(
                 "Grupo": str(aluno["Grupo"]),
                 "% Realizado": float(pct_real),
                 "% Projetado": float(pct_proj),
+                "Faltas seguidas": int(seguidas),
             }
         )
 

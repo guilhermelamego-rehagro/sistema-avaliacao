@@ -8,6 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from data.sheets import ler_aba
+from utils.datas import parse_data_planilha_series
 
 
 def hoje_normalizado() -> pd.Timestamp:
@@ -30,8 +31,9 @@ def _obter_disciplina_ativa_cached():
 
 def preparar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
     df = df_ciclos.copy()
-    df["Data início"] = pd.to_datetime(df["Data início"], format="%d/%m/%Y", errors="coerce")
-    df["Data fim"] = pd.to_datetime(df["Data fim"], format="%d/%m/%Y", errors="coerce")
+    for col in ("Data início", "Data fim"):
+        if col in df.columns:
+            df[col] = parse_data_planilha_series(df[col])
     return df
 
 
@@ -49,14 +51,20 @@ def ciclos_da_disciplina(df_ciclos: pd.DataFrame, id_disciplina: str) -> pd.Data
 
 
 def ordenar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
+    """Ordem vale dentro de cada disciplina (1, 2, 3… por ID_Disciplina)."""
     df = df_ciclos.copy()
+    chaves: list[str] = []
+    if "ID_Disciplina" in df.columns:
+        chaves.append("ID_Disciplina")
     if "Ordem" in df.columns:
         df["Ordem"] = pd.to_numeric(df["Ordem"], errors="coerce")
-        return df.sort_values("Ordem", na_position="last")
+        chaves.append("Ordem")
     if "Data início" in df.columns:
         df = preparar_ciclos(df)
-        return df.sort_values("Data início", na_position="last")
-    return df
+        chaves.append("Data início")
+    if not chaves:
+        return df
+    return df.sort_values(chaves, na_position="last")
 
 
 def ciclo_padrao_nome(ciclos: pd.DataFrame, hoje: pd.Timestamp | None = None) -> str | None:

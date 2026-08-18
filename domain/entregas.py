@@ -9,6 +9,7 @@ import pandas as pd
 
 from data.sheets import garantir_aba_avaliacao, ler_aba, limpar_cache_planilhas, planilha
 from domain.avaliacoes import filtrar_avaliacoes_grupo
+from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from utils.ordenacao import ordenar_grupos_lista
 
 
@@ -208,6 +209,7 @@ def disciplina_com_entregas_abertas(id_disciplina: str) -> bool:
     ciclos = df_ciclos[
         df_ciclos["ID_Disciplina"].astype(str).str.strip() == str(id_disciplina).strip()
     ]
+    ciclos = ciclos_visiveis_avaliacao(ciclos, id_disciplina)
     for _, row in ciclos.iterrows():
         id_ciclo = str(row["ID_Ciclo"]).strip()
         aberta, _ = avaliacao_entregas_aberta(id_disciplina, id_ciclo)

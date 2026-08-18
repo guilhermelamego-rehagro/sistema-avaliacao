@@ -9,6 +9,7 @@ from data.sheets import ler_aba
 from domain.avaliacoes import formatar_nota_entrega, obter_avaliacao_grupo, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina
+from domain.encontro_presencial import resolver_id_ciclo_componente
 from domain.presenca import calcular_matriz_dailies
 
 
@@ -26,14 +27,15 @@ def calcular_nota_ciclo(
     return round(componente * float(nota_grupo_0_10), 2)
 
 
-def _nota_pares_ciclo(email: str, id_ciclo: str) -> float | None:
+def _situacao_pares_ciclo(email: str, id_ciclo: str) -> tuple[float | None, bool]:
+    """Retorna (nota de pares 0-10 ou None, se o aluno já enviou a avaliação)."""
     try:
         df = ler_aba("Avaliacoes")
     except Exception:
-        return None
+        return None, False
 
     if df.empty:
-        return None
+        return None, False
 
     id_c = str(id_ciclo).strip()
     email_l = email.lower().strip()
@@ -42,12 +44,17 @@ def _nota_pares_ciclo(email: str, id_ciclo: str) -> float | None:
     realizou = not df_c[df_c["Email_Avaliador"].astype(str).str.lower().str.strip() == email_l].empty
     recebidas = df_c[df_c["Email_Avaliado"].astype(str).str.lower().str.strip() == email_l]
     if recebidas.empty:
-        return None
+        return None, realizou
 
     media = pd.to_numeric(recebidas["Nota"], errors="coerce").mean()
     if pd.isna(media):
-        return None
-    return calcular_nota_pares(media, realizou)
+        return None, realizou
+    return calcular_nota_pares(media, realizou), realizou
+
+
+def _nota_pares_ciclo(email: str, id_ciclo: str) -> float | None:
+    nota, _ = _situacao_pares_ciclo(email, id_ciclo)
+    return nota
 
 
 def _nota_grupo_ciclo(grupo: str, id_ciclo: str, sala: str = "") -> float | None:
@@ -62,15 +69,16 @@ def _montar_detalhe_ciclo(
     nota_pares: float | None,
     nota_orientador: float | None,
 ) -> str:
-    """Detalhe só com notas já lançadas: grupo → pares → orientador."""
-    partes = []
-    if nota_grupo is not None:
-        partes.append(f"Grupo {formatar_nota_entrega(nota_grupo)}")
-    if nota_pares is not None:
-        partes.append(f"Pares {formatar_nota_entrega(nota_pares)}")
-    if nota_orientador is not None:
-        partes.append(f"Orientador {formatar_nota_entrega(nota_orientador)}")
-    return " | ".join(partes)
+    """Sempre reserva Grupo, Pares e Orientador; usa — se a nota ainda não saiu."""
+
+    def _fmt(nota: float | None) -> str:
+        return formatar_nota_entrega(nota) if nota is not None else "—"
+
+    return (
+        f"Grupo {_fmt(nota_grupo)} | "
+        f"Pares {_fmt(nota_pares)} | "
+        f"Orientador {_fmt(nota_orientador)}"
+    )
 
 
 def _resolver_nota_pares_ciclo(
@@ -79,12 +87,18 @@ def _resolver_nota_pares_ciclo(
     nota_orientador: float | None,
     nota_grupo: float | None,
 ) -> float | None:
-    nota_pares = _nota_pares_ciclo(email, id_ciclo)
+    """Pares só aparece depois que o aluno avalia, ou quando o ciclo já encerrou."""
+    nota_pares, realizou = _situacao_pares_ciclo(email, id_ciclo)
+    ciclo_encerrado = ciclo_inativo(id_ciclo)
+
+    if not ciclo_encerrado and not realizou:
+        return None
+
     if (
         nota_pares is None
         and nota_orientador is not None
         and nota_grupo is not None
-        and ciclo_inativo(id_ciclo)
+        and ciclo_encerrado
     ):
         return 0.0
     return nota_pares
@@ -132,7 +146,8 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
         tipo = str(comp["Tipo"]).strip()
         nome = str(comp["Nome"]).strip()
         peso = float(comp["Peso"])
-        id_ciclo = str(comp.get("ID_Ciclo", "")).strip()
+        id_ciclo_cfg = str(comp.get("ID_Ciclo", "")).strip()
+        id_ciclo, origem_ciclo = resolver_id_ciclo_componente(tipo, id_ciclo_cfg, id_disciplina)
         tipo_label = TIPOS_COMPONENTE_LABEL.get(tipo, tipo)
 
         nota: float | None = None
@@ -143,6 +158,8 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
             nota_grp = _nota_grupo_ciclo(grupo, id_ciclo, sala)
             nota_par = _resolver_nota_pares_ciclo(email, id_ciclo, nota_ori, nota_grp)
             detalhe = _montar_detalhe_ciclo(nota_grp, nota_par, nota_ori)
+            if origem_ciclo:
+                detalhe += f" · iguais a {origem_ciclo}"
 
             if nota_ori is not None and nota_par is not None and nota_grp is not None:
                 nota = calcular_nota_ciclo(nota_ori, nota_par, nota_grp)

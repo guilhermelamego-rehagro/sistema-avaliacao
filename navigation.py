@@ -21,6 +21,7 @@ ROTA_CURSO_AVALIAR = "curso_avaliar"
 ROTA_FREQ_AULAS = "freq_aulas"
 ROTA_FREQ_DAILIES = "freq_dailies"
 ROTA_RESULTADOS_PARES = "resultados_pares"
+ROTA_AVALIACAO_GRUPO_ALUNO = "avaliacao_grupo_aluno"
 ROTA_MINHAS_NOTAS = "minhas_notas"
 
 # Professor orientador
@@ -37,13 +38,21 @@ ROTA_LIBERAR_NOTAS = "liberar_notas"
 ROTA_COORD_CONFIG = "coord_config"
 ROTA_COORD_COMPONENTES = "coord_componentes"
 ROTA_COORD_CONFERIR = "coord_conferir"
+ROTA_COORD_DISCIPLINAS = "coord_disciplinas"
+ROTA_COORD_CICLOS = "coord_ciclos"
+ROTA_COORD_PROFESSORES = "coord_professores"
+ROTA_FREQ_ENCONTRO = "freq_encontro"
 
 ROTAS_LAYOUT_LARGO = frozenset(
     {
         ROTA_FREQ_CONTROLE,
         ROTA_FREQ_DAILIES_PROF,
+        ROTA_FREQ_ENCONTRO,
         ROTA_ORIENTADOR,
         ROTA_COORD_CONFERIR,
+        ROTA_COORD_DISCIPLINAS,
+        ROTA_COORD_CICLOS,
+        ROTA_COORD_PROFESSORES,
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
     }
@@ -57,6 +66,7 @@ LEGACY_ROUTES: dict[str, str] = {
     "Avaliação do curso": ROTA_CURSO_AVALIAR,
     "Meus resultados de pares": ROTA_RESULTADOS_PARES,
     "Minhas Notas": ROTA_MINHAS_NOTAS,
+    "Avaliação do grupo": ROTA_AVALIACAO_GRUPO_ALUNO,
     "Minha Frequência": ROTA_FREQ_AULAS,
     "Minhas Dailies": ROTA_FREQ_DAILIES,
     "Avaliações de pares": ROTA_PARES_ACOMP,
@@ -136,8 +146,9 @@ def _secoes_aluno() -> list[SecaoMenu]:
             "Meu desempenho e participação",
             (
                 ItemMenu(ROTA_FREQ_AULAS, "Frequência nas aulas"),
-                ItemMenu(ROTA_FREQ_DAILIES, "Participação nas dailies"),
+                ItemMenu(ROTA_FREQ_DAILIES, "Presença nas dailies"),
                 ItemMenu(ROTA_RESULTADOS_PARES, "Resultados de pares"),
+                ItemMenu(ROTA_AVALIACAO_GRUPO_ALUNO, "Avaliação do grupo"),
                 ItemMenu(ROTA_MINHAS_NOTAS, "Minhas notas (boletim)"),
             ),
         ),
@@ -164,6 +175,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
             (
                 ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),
                 ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"),
+                ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
             ),
         ),
         SecaoMenu(
@@ -174,11 +186,15 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     if modo_coordenador:
         itens_coord: list[ItemMenu] = [
             ItemMenu(ROTA_COORD_CONFIG, "Configurações do coordenador"),
+            ItemMenu(ROTA_COORD_DISCIPLINAS, "Cadastro de disciplinas"),
+            ItemMenu(ROTA_COORD_CICLOS, "Cadastro de ciclos"),
+            ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
             ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
             ItemMenu(ROTA_COORD_CONFERIR, "Conferir entregas"),
         ]
         if not professor_e_orientador(usuario):
             itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))
+            itens_coord.append(ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"))
             itens_coord.append(_item_liberacao_notas())
         secoes.insert(
             0,
@@ -200,7 +216,10 @@ def _secoes_secretaria() -> list[SecaoMenu]:
     return [
         SecaoMenu(
             "Presença",
-            (ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),),
+            (
+                ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),
+                ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
+            ),
         ),
     ]
 

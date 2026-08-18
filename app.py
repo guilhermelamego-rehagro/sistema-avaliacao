@@ -22,6 +22,7 @@ from data.sheets import (
     preparar_ambiente_planilhas,
 )
 from domain.ciclos import hoje_normalizado, indice_ciclo_padrao, obter_disciplina_ativa
+from domain.encontro_presencial import escolher_ciclo_aberto
 from domain.notas import calcular_nota_pares
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca
 from utils.disciplina import normalizar_id
@@ -31,16 +32,21 @@ from navigation import (
     ROTA_COORD_COMPONENTES,
     ROTA_COORD_CONFIG,
     ROTA_COORD_CONFERIR,
+    ROTA_COORD_CICLOS,
+    ROTA_COORD_DISCIPLINAS,
+    ROTA_COORD_PROFESSORES,
     ROTA_CURSO_AVALIAR,
     ROTA_FREQ_AULAS,
     ROTA_FREQ_CONTROLE,
     ROTA_FREQ_DAILIES,
     ROTA_FREQ_DAILIES_PROF,
+    ROTA_FREQ_ENCONTRO,
     ROTA_IMPORT_CANVAS,
     ROTA_INICIO,
     ROTA_LANCAR_BANCA,
     ROTA_LIBERAR_NOTAS,
     ROTA_MINHAS_NOTAS,
+    ROTA_AVALIACAO_GRUPO_ALUNO,
     ROTA_MODERACAO,
     ROTA_ORIENTADOR,
     ROTA_PARES_ACOMP,
@@ -50,9 +56,9 @@ from navigation import (
     renderizar_sidebar,
     rota_padrao,
 )
-from views import aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
+from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_controle_presenca, prof_liberacao_notas
+from views import home_aluno, prof_cadastros, prof_controle_presenca, prof_liberacao_notas, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 
 # 1. Configurações Iniciais da Página
@@ -76,6 +82,24 @@ st.markdown("""
             border: 2px solid #B38F36 !important;
             width: 40px !important;
             height: 40px !important;
+        }
+        button[data-testid="stBaseButton-primary"],
+        button[data-testid="stBaseButton-primaryFormSubmit"],
+        button[kind="primary"],
+        button[kind="primaryFormSubmit"],
+        div[data-testid="stFormSubmitButton"] button {
+            background-color: #004D28 !important;
+            border-color: #004D28 !important;
+            color: #ffffff !important;
+        }
+        button[data-testid="stBaseButton-primary"]:hover,
+        button[data-testid="stBaseButton-primaryFormSubmit"]:hover,
+        button[kind="primary"]:hover,
+        button[kind="primaryFormSubmit"]:hover,
+        div[data-testid="stFormSubmitButton"] button:hover {
+            background-color: #00361c !important;
+            border-color: #00361c !important;
+            color: #ffffff !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -194,19 +218,15 @@ else:
         id_disc = str(disc_ativa.iloc[0]['ID_Disciplina']).strip()
         nome_disc = str(disc_ativa.iloc[0]['Nome_Disciplina']).strip()
         
-        df_ciclos['Data início'] = pd.to_datetime(df_ciclos['Data início'], format='%d/%m/%Y', errors='coerce')
-        df_ciclos['Data fim'] = pd.to_datetime(df_ciclos['Data fim'], format='%d/%m/%Y', errors='coerce')
-        
         ciclos_disc = df_ciclos[df_ciclos['ID_Disciplina'].astype(str).str.strip() == id_disc]
-        ciclo_ativo = ciclos_disc[(ciclos_disc['Status'].str.lower() == 'ativo') | 
-                                  ((hoje >= ciclos_disc['Data início']) & (hoje <= ciclos_disc['Data fim']))]
+        ciclo_ativo = escolher_ciclo_aberto(ciclos_disc, id_disc)
         
-        if ciclo_ativo.empty:
+        if ciclo_ativo is None:
             st.warning("Não há nenhum ciclo de avaliação aberto para você hoje.")
             st.stop()
             
-        id_ciclo = str(ciclo_ativo.iloc[0]['ID_Ciclo']).strip()
-        nome_ciclo = str(ciclo_ativo.iloc[0]['Nome_Ciclo']).strip()
+        id_ciclo = str(ciclo_ativo['ID_Ciclo']).strip()
+        nome_ciclo = str(ciclo_ativo['Nome_Ciclo']).strip()
         
         ja_avaliou = not df_aval[(df_aval['ID_Ciclo'].astype(str).str.strip() == id_ciclo) & 
                                  (df_aval['Email_Avaliador'].astype(str).str.lower().str.strip() == aluno['email'])].empty
@@ -276,17 +296,15 @@ else:
         df_respostas = ler_aba("Respostas_Curso") 
         df_prof = ler_aba("Config_Professores") 
         
-        df_ciclos['Data início'] = pd.to_datetime(df_ciclos['Data início'], format='%d/%m/%Y', errors='coerce')
-        df_ciclos['Data fim'] = pd.to_datetime(df_ciclos['Data fim'], format='%d/%m/%Y', errors='coerce')
-        ciclo_ativo = df_ciclos[(df_ciclos['Status'].str.lower() == 'ativo') | ((hoje >= df_ciclos['Data início']) & (hoje <= df_ciclos['Data fim']))]
+        ciclo_ativo = escolher_ciclo_aberto(df_ciclos)
         
-        if ciclo_ativo.empty:
+        if ciclo_ativo is None:
             st.warning("Não há nenhuma avaliação de curso aberta para hoje.")
             st.stop()
             
-        id_ciclo = str(ciclo_ativo.iloc[0]['ID_Ciclo']).strip()
-        nome_ciclo = str(ciclo_ativo.iloc[0]['Nome_Ciclo']).strip()
-        id_disc = str(ciclo_ativo.iloc[0]['ID_Disciplina']).strip()
+        id_ciclo = str(ciclo_ativo['ID_Ciclo']).strip()
+        nome_ciclo = str(ciclo_ativo['Nome_Ciclo']).strip()
+        id_disc = str(ciclo_ativo['ID_Disciplina']).strip()
         nome_disc = str(df_disc[df_disc['ID_Disciplina'].astype(str).str.strip() == id_disc].iloc[0]['Nome_Disciplina'])
         
         if not df_respostas.empty:
@@ -376,14 +394,12 @@ else:
         id_disc = str(disc_ativa.iloc[0]['ID_Disciplina']).strip()
         nome_disc = str(disc_ativa.iloc[0]['Nome_Disciplina']).strip()
         
-        df_ciclos['Data início'] = pd.to_datetime(df_ciclos['Data início'], format='%d/%m/%Y', errors='coerce')
-        df_ciclos['Data fim'] = pd.to_datetime(df_ciclos['Data fim'], format='%d/%m/%Y', errors='coerce')
         ciclos_disc = df_ciclos[df_ciclos['ID_Disciplina'].astype(str).str.strip() == id_disc]
-        ciclo_ativo_hoje = ciclos_disc[(ciclos_disc['Status'].str.lower() == 'ativo') | ((hoje >= ciclos_disc['Data início']) & (hoje <= ciclos_disc['Data fim']))]
+        ciclo_ativo_hoje = escolher_ciclo_aberto(ciclos_disc, id_disc)
         
-        if not ciclo_ativo_hoje.empty:
-            id_ativo = str(ciclo_ativo_hoje.iloc[0]['ID_Ciclo']).strip()
-            nome_ativo = str(ciclo_ativo_hoje.iloc[0]['Nome_Ciclo']).strip()
+        if ciclo_ativo_hoje is not None:
+            id_ativo = str(ciclo_ativo_hoje['ID_Ciclo']).strip()
+            nome_ativo = str(ciclo_ativo_hoje['Nome_Ciclo']).strip()
             
             votou_ativo = not df_aval[(df_aval['ID_Ciclo'].astype(str).str.strip() == id_ativo) & 
                                       (df_aval['Email_Avaliador'].str.lower().str.strip() == aluno['email'])].empty
@@ -807,11 +823,22 @@ else:
     # NOVAS TELAS: MINHA FREQUÊNCIA (ALUNO)
     # =========================================================
     elif menu == ROTA_FREQ_AULAS and perfil == "Aluno":
-        # 1. Puxar qual é a disciplina do momento e registrar o log
         id_ativa, nome_ativa = obter_disciplina_ativa()
         registrar_log_acesso(aluno['email'], aluno['nome'], "Visualizou Frequência")
-        
-        st.header(f"Frequência nas aulas: {nome_ativa}")
+
+        st.header("Frequência nas aulas")
+        if not id_ativa:
+            st.warning("Nenhuma disciplina ativa no momento.")
+            st.stop()
+
+        df_entrancia_freq = ler_aba("Entrancia_Turma")
+        vinculo_freq = df_entrancia_freq[
+            (df_entrancia_freq["Email_Pessoal"].astype(str).str.lower().str.strip() == aluno["email"])
+            & (df_entrancia_freq["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_ativa))
+        ]
+        grupo_freq = str(vinculo_freq.iloc[0]["Grupo"]).strip() if not vinculo_freq.empty else "—"
+        sala_freq = str(vinculo_freq.iloc[0].get("Sala", "")).strip() if not vinculo_freq.empty else ""
+        st.info(f"**Disciplina:** {nome_ativa} | **Grupo:** {grupo_freq} | **Sala:** {sala_freq or '—'}")
         try:
             dfs_presenca = carregar_base_presenca()
             df_frequencia = calcular_matriz_presencas(aluno['email'], dfs_cache=dfs_presenca)
@@ -848,7 +875,7 @@ else:
             c1.metric("Frequência Atual (Realizada)", f"{pct_atual:.1f}%")
             c2.metric("Frequência Projetada*", f"{pct_projetada:.1f}%")
 
-            if pct_projetada < 75.0:
+            if pct_atual < 75.0:
                 c3.error("⚠️ Risco de Reprovação (< 75%)")
             else:
                 c3.success("✅ Situação Regular")
@@ -874,8 +901,20 @@ else:
     elif menu == ROTA_FREQ_DAILIES and perfil == "Aluno":
         id_ativa, nome_ativa = obter_disciplina_ativa()
         registrar_log_acesso(aluno['email'], aluno['nome'], "Visualizou Dailies")
-        
-        st.header(f"Participação nas dailies: {nome_ativa}")
+
+        st.header("Presença nas dailies")
+        if not id_ativa:
+            st.warning("Nenhuma disciplina ativa no momento.")
+            st.stop()
+
+        df_entrancia_dailies = ler_aba("Entrancia_Turma")
+        vinculo_dailies = df_entrancia_dailies[
+            (df_entrancia_dailies["Email_Pessoal"].astype(str).str.lower().str.strip() == aluno["email"])
+            & (df_entrancia_dailies["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_ativa))
+        ]
+        grupo_dailies = str(vinculo_dailies.iloc[0]["Grupo"]).strip() if not vinculo_dailies.empty else "—"
+        sala_dailies = str(vinculo_dailies.iloc[0].get("Sala", "")).strip() if not vinculo_dailies.empty else ""
+        st.info(f"**Disciplina:** {nome_ativa} | **Grupo:** {grupo_dailies} | **Sala:** {sala_dailies or '—'}")
         try:
             dfs_presenca = carregar_base_presenca()
             df_dailies = calcular_matriz_dailies(aluno['email'], dfs_cache=dfs_presenca)
@@ -911,10 +950,10 @@ else:
             c1, c2, c3 = st.columns(3)
             c1.metric("Nota Atual de Dailies", f"{pct_atual:.1f}%")
             c2.metric("Projeção de Nota Dailies*", f"{pct_projetada:.1f}%")
-            if pct_projetada < 75.0:
-                c3.error("⚠️ Baixa Participação")
+            if pct_atual < 75.0:
+                c3.error("⚠️ Baixa presença")
             else:
-                c3.success("✅ Ótima Participação")
+                c3.success("✅ Presença regular")
 
             st.caption("ℹ️ *A nota projetada considera uma presença em 100% das próximas reuniões de orientação de projetos.*")
 
@@ -943,11 +982,20 @@ else:
     ):
         prof_controle_presenca.render(aluno, tipo="dailies")
 
+    elif menu == ROTA_FREQ_ENCONTRO and (
+        perfil == "Secretaria"
+        or (perfil == "Professor" and (professor_e_orientador(aluno) or usuario_e_coordenador(aluno)))
+    ):
+        prof_presenca_encontro.render(aluno)
+
     # =========================================================
     # MÓDULO ALUNO: MINHAS NOTAS
     # =========================================================
     elif menu == ROTA_MINHAS_NOTAS and perfil == "Aluno":
         aluno_minhas_notas.render(aluno)
+
+    elif menu == ROTA_AVALIACAO_GRUPO_ALUNO and perfil == "Aluno":
+        aluno_avaliacao_grupo.render(aluno)
 
     # =========================================================
     # MÓDULO PROFESSOR: COMPONENTES DE AVALIAÇÃO
@@ -960,6 +1008,15 @@ else:
     # =========================================================
     elif menu == ROTA_COORD_CONFIG and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_coordenador.render(aluno)
+
+    elif menu == ROTA_COORD_DISCIPLINAS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_cadastros.render_disciplinas(aluno)
+
+    elif menu == ROTA_COORD_CICLOS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_cadastros.render_ciclos(aluno)
+
+    elif menu == ROTA_COORD_PROFESSORES and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_cadastros.render_professores(aluno)
 
     # =========================================================
     # MÓDULO COORDENADOR: CONFERÊNCIA DE ENTREGAS

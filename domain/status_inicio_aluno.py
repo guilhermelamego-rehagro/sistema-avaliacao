@@ -8,7 +8,8 @@ from typing import Literal
 import pandas as pd
 
 from data.sheets import ler_aba
-from domain.ciclos import ciclos_da_disciplina, filtrar_ciclos_ativos, hoje_normalizado, preparar_ciclos
+from domain.ciclos import ciclos_da_disciplina, hoje_normalizado, preparar_ciclos
+from domain.encontro_presencial import ciclos_visiveis_avaliacao, escolher_ciclo_aberto, preparar_ciclos_visiveis
 
 StatusTarefa = Literal["pendente", "feito", "perdido", "indisponivel"]
 
@@ -73,12 +74,11 @@ def status_avaliacao_pares(email_aluno: str) -> ResumoTarefa:
 
     id_disc, nome_disc = disc
     df_ciclos = preparar_ciclos(ler_aba("Ciclos"))
-    ciclos_disc = ciclos_da_disciplina(df_ciclos, id_disc)
+    ciclos_disc = ciclos_visiveis_avaliacao(ciclos_da_disciplina(df_ciclos, id_disc), id_disc)
     df_aval = ler_aba("Avaliacoes")
 
-    ativos = filtrar_ciclos_ativos(ciclos_disc, hoje)
-    if not ativos.empty:
-        ciclo = ativos.iloc[0]
+    ciclo = escolher_ciclo_aberto(ciclos_disc, id_disc)
+    if ciclo is not None:
         id_ciclo = str(ciclo["ID_Ciclo"]).strip()
         nome_ciclo = str(ciclo["Nome_Ciclo"]).strip()
         if _aluno_votou_pares(df_aval, id_ciclo, email_aluno):
@@ -116,12 +116,11 @@ def status_avaliacao_pares(email_aluno: str) -> ResumoTarefa:
 
 def status_avaliacao_curso(email_aluno: str) -> ResumoTarefa:
     hoje = hoje_normalizado()
-    df_ciclos = preparar_ciclos(ler_aba("Ciclos"))
+    df_ciclos = preparar_ciclos_visiveis(preparar_ciclos(ler_aba("Ciclos")))
     df_respostas = ler_aba("Respostas_Curso")
 
-    ativos = filtrar_ciclos_ativos(df_ciclos, hoje)
-    if not ativos.empty:
-        ciclo = ativos.iloc[0]
+    ciclo = escolher_ciclo_aberto(df_ciclos)
+    if ciclo is not None:
         id_ciclo = str(ciclo["ID_Ciclo"]).strip()
         nome_ciclo = str(ciclo["Nome_Ciclo"]).strip()
         if _aluno_respondeu_curso(df_respostas, id_ciclo, email_aluno):

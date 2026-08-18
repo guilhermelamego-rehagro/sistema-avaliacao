@@ -13,6 +13,11 @@ def parse_data_planilha(valor) -> pd.Timestamp:
         return pd.NaT
     if isinstance(valor, pd.Timestamp):
         return valor
+    if hasattr(valor, "year") and hasattr(valor, "month") and hasattr(valor, "day"):
+        try:
+            return pd.Timestamp(valor)
+        except Exception:
+            return pd.NaT
     if isinstance(valor, (int, float)):
         if valor >= _LIMITE_SERIAL:
             return pd.to_datetime(valor, unit="D", origin=_ORIGEM_SHEETS, errors="coerce")

@@ -287,6 +287,67 @@ def carregar_mapa_avaliacoes_grupo(id_disciplina: str) -> dict[tuple[str, str, s
     return mapa
 
 
+def listar_comentarios_banca_grupo(
+    id_disciplina: str,
+    grupo: str,
+    sala: str = "",
+) -> list[dict]:
+    """Último lançamento de cada professor, por ciclo, para o grupo do aluno."""
+    try:
+        df = ler_aba("Avaliacao_Grupo")
+    except Exception:
+        return []
+    if df.empty:
+        return []
+
+    filtro = filtrar_avaliacoes_grupo(
+        df, id_disciplina=id_disciplina, grupo=grupo, sala=sala or None
+    )
+    if filtro.empty:
+        return []
+
+    filtro = filtro.copy()
+    if "Sala" not in filtro.columns:
+        filtro["Sala"] = ""
+    if "Nome_Avaliador" not in filtro.columns:
+        filtro["Nome_Avaliador"] = ""
+    if "Email_Avaliador" not in filtro.columns:
+        filtro["Email_Avaliador"] = ""
+    if "Comentario" not in filtro.columns:
+        filtro["Comentario"] = ""
+    if "Nome_Ciclo" not in filtro.columns:
+        filtro["Nome_Ciclo"] = ""
+
+    if "Data" in filtro.columns:
+        filtro["_ordem"] = pd.to_datetime(
+            filtro["Data"], format="%d/%m/%Y %H:%M:%S", errors="coerce"
+        )
+        filtro = filtro.sort_values("_ordem", na_position="last")
+
+    filtro["_ciclo"] = filtro["ID_Ciclo"].astype(str).str.strip()
+    filtro["_avaliador"] = filtro["Email_Avaliador"].astype(str).str.lower().str.strip()
+
+    registros: list[dict] = []
+    for _, bloco in filtro.groupby(["_ciclo", "_avaliador"], sort=False):
+        row = bloco.iloc[-1]
+        comentario = str(row.get("Comentario", "") or "").strip()
+        registros.append(
+            {
+                "id_ciclo": str(row.get("ID_Ciclo", "")).strip(),
+                "nome_ciclo": str(row.get("Nome_Ciclo", "")).strip(),
+                "nome_avaliador": str(row.get("Nome_Avaliador", "")).strip()
+                or str(row.get("Email_Avaliador", "")).strip(),
+                "email_avaliador": str(row.get("Email_Avaliador", "")).strip().lower(),
+                "comentario": comentario,
+                "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
+                "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
+                "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
+                "data": str(row.get("Data", "")).strip(),
+            }
+        )
+    return registros
+
+
 def buscar_avaliacao_grupo_mapa(
     mapa: dict[tuple[str, str, str], dict],
     grupo: str,

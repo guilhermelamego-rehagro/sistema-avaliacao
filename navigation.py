@@ -41,6 +41,7 @@ ROTA_COORD_CONFERIR = "coord_conferir"
 ROTA_COORD_DISCIPLINAS = "coord_disciplinas"
 ROTA_COORD_CICLOS = "coord_ciclos"
 ROTA_COORD_PROFESSORES = "coord_professores"
+ROTA_COORD_PLANEJAMENTO = "coord_planejamento"
 ROTA_FREQ_ENCONTRO = "freq_encontro"
 
 ROTAS_LAYOUT_LARGO = frozenset(
@@ -53,6 +54,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_COORD_DISCIPLINAS,
         ROTA_COORD_CICLOS,
         ROTA_COORD_PROFESSORES,
+        ROTA_COORD_PLANEJAMENTO,
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
     }
@@ -186,6 +188,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     if modo_coordenador:
         itens_coord: list[ItemMenu] = [
             ItemMenu(ROTA_COORD_CONFIG, "Configurações do coordenador"),
+            ItemMenu(ROTA_COORD_PLANEJAMENTO, "Planejamento acadêmico"),
             ItemMenu(ROTA_COORD_DISCIPLINAS, "Cadastro de disciplinas"),
             ItemMenu(ROTA_COORD_CICLOS, "Cadastro de ciclos"),
             ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),

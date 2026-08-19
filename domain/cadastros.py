@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import re
+import time
+
 import pandas as pd
 
-from data.sheets import ler_aba, salvar_aba
+from config import ABAS_AVALIACAO, ABAS_FREQUENCIA
+from data.sheets import ler_aba, ler_aba_frequencia, salvar_aba, salvar_aba_frequencia
 from utils.datas import parse_data_planilha, parse_data_planilha_series
-from utils.disciplina import normalizar_id
+from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id
 
 COLUNAS_DISCIPLINAS = ["ID_Disciplina", "Nome_Disciplina", "Status", "Encontro_Presencial"]
 ENCONTRO_OPCOES = ["Não", "Sim"]
@@ -104,6 +108,201 @@ def salvar_disciplinas(df: pd.DataFrame) -> str | None:
         return "Deixe apenas uma disciplina com status ativo."
     salvar_aba("Disciplinas", df, _colunas_gravacao(df, COLUNAS_DISCIPLINAS))
     return None
+
+
+_ABAS_CODIGO_AVALIACAO = [
+    "Disciplinas",
+    "Ciclos",
+    "Config_Professores",
+    "Entrancia_Turma",
+    "Avaliacoes",
+    "Respostas_Curso",
+] + list(ABAS_AVALIACAO.keys())
+
+_ABAS_CODIGO_FREQUENCIA = list(dict.fromkeys(
+    list(ABAS_FREQUENCIA.keys())
+    + [
+        "Calendario_Aulas",
+        "Calendario_Dailies",
+        "Calendario_Unificado",
+        "BD_Presenca",
+        "Ajustes_Presenca",
+    ]
+))
+
+_COLUNAS_CODIGO = {
+    "ID_Disciplina",
+    "Id_Disciplina",
+    "ID_Ciclo",
+    "Id_Ciclo",
+    "ID do Ciclo",
+    "ID_Componente",
+}
+
+_COLUNAS_CODIGO_FREQ_EXATO = {"Disciplina"}
+
+
+def pares_codigo_alterado(antes: pd.DataFrame, depois: pd.DataFrame) -> list[tuple[str, str]]:
+    """Detecta troca de código na mesma linha do cadastro (ex.: 20263TRI → TRIB)."""
+    pares = []
+    n = min(len(antes), len(depois))
+    for i in range(n):
+        antigo = normalizar_id(antes.iloc[i].get("ID_Disciplina", ""))
+        novo = normalizar_id(depois.iloc[i].get("ID_Disciplina", ""))
+        if antigo and novo and antigo != novo:
+            pares.append((antigo, novo))
+    return pares
+
+
+def _valor_codigo_renomeado(valor, antigo: str, novo: str) -> str:
+    atual = normalizar_id(valor)
+    if not atual:
+        return "" if valor is None or (isinstance(valor, float) and pd.isna(valor)) else str(valor).strip()
+    if atual == antigo:
+        return novo
+    if atual.startswith(antigo + "-") or atual.startswith(antigo + "_"):
+        return novo + atual[len(antigo) :]
+    antigo_comp = re.sub(r"[^A-Za-z0-9]", "", antigo)[:8].upper()
+    novo_comp = re.sub(r"[^A-Za-z0-9]", "", novo)[:8].upper()
+    prefixo = f"COMP-{antigo_comp}-"
+    if antigo_comp and atual.upper().startswith(prefixo):
+        return f"COMP-{novo_comp}-" + atual[len(prefixo) :]
+    return atual
+
+
+def _renomear_colunas_df(
+    df: pd.DataFrame,
+    antigo: str,
+    novo: str,
+    *,
+    colunas_exatas: set[str] | None = None,
+) -> tuple[pd.DataFrame, int]:
+    if df is None or df.empty:
+        return df, 0
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+    trocas = 0
+    extras = colunas_exatas or set()
+    for col in out.columns:
+        nome_col = col.strip()
+        so_exato = nome_col in extras
+        if nome_col not in _COLUNAS_CODIGO and not so_exato:
+            continue
+        novos = []
+        mudou_col = 0
+        for v in out[col]:
+            orig = normalizar_id(v)
+            if so_exato:
+                n = novo if orig == antigo else orig
+            else:
+                n = _valor_codigo_renomeado(v, antigo, novo)
+            if orig and n != orig:
+                novos.append(n)
+                mudou_col += 1
+            else:
+                novos.append(v)
+        if mudou_col:
+            out[col] = novos
+            trocas += mudou_col
+    return out, trocas
+
+
+def propagar_codigo_disciplina(antigo: str, novo: str, *, incluir_disciplinas: bool = False) -> list[str]:
+    """Atualiza o código da disciplina (e prefixos de ciclo/componente) nas abas relacionadas."""
+    antigo = normalizar_id(antigo)
+    novo = normalizar_id(novo)
+    if not antigo or not novo or antigo == novo:
+        return []
+    avisos: list[str] = []
+    vistas = set()
+    for nome in _ABAS_CODIGO_AVALIACAO:
+        if nome in vistas:
+            continue
+        vistas.add(nome)
+        if nome == "Disciplinas" and not incluir_disciplinas:
+            continue
+        try:
+            df = ler_aba(nome)
+        except Exception:
+            continue
+        atualizado, n = _renomear_colunas_df(df, antigo, novo)
+        if n == 0:
+            continue
+        try:
+            salvar_aba(nome, atualizado, list(atualizado.columns))
+            avisos.append(f"{nome}: {n} célula(s)")
+            time.sleep(0.4)
+        except Exception as exc:
+            avisos.append(f"{nome}: não foi possível gravar ({exc})")
+
+    avisos.extend(propagar_codigo_frequencia(antigo, novo))
+    return avisos
+
+
+def _amostras_codigo_frequencia() -> list[tuple[str, str]]:
+    amostras: list[tuple[str, str]] = []
+    for nome in _ABAS_CODIGO_FREQUENCIA:
+        try:
+            df = ler_aba_frequencia(nome)
+        except Exception:
+            continue
+        if df is None or df.empty or "ID_Disciplina" not in df.columns:
+            continue
+        nomes = df["Disciplina"] if "Disciplina" in df.columns else [""] * len(df)
+        for codigo, nome_disc in zip(df["ID_Disciplina"], nomes):
+            amostras.append((str(codigo), str(nome_disc)))
+    return amostras
+
+
+def inferir_pares_codigo_frequencia() -> list[tuple[str, str]]:
+    """Detecta 20263TRI na planilha de presença vs TRIB no cadastro."""
+    discs = carregar_disciplinas()
+    if discs.empty:
+        return []
+    atuais = {
+        normalizar_id(row["ID_Disciplina"]): str(row.get("Nome_Disciplina", "")).strip()
+        for _, row in discs.iterrows()
+        if normalizar_id(row["ID_Disciplina"])
+    }
+    mapa = mapa_codigo_disciplina_legado(atuais, _amostras_codigo_frequencia())
+    return [(antigo, novo) for antigo, novo in mapa.items() if antigo != novo]
+
+
+def alinhar_codigos_frequencia() -> list[str]:
+    """Reescreve IDs antigos na planilha de presenças para o código atual da disciplina."""
+    avisos: list[str] = []
+    for antigo, novo in inferir_pares_codigo_frequencia():
+        partes = propagar_codigo_frequencia(antigo, novo)
+        if partes:
+            avisos.extend([f"{antigo} → {novo}: {msg}" for msg in partes])
+        else:
+            avisos.append(f"{antigo} → {novo}: nada a alterar")
+    return avisos
+
+
+def propagar_codigo_frequencia(antigo: str, novo: str) -> list[str]:
+    antigo = normalizar_id(antigo)
+    novo = normalizar_id(novo)
+    if not antigo or not novo or antigo == novo:
+        return []
+    avisos: list[str] = []
+    for nome in _ABAS_CODIGO_FREQUENCIA:
+        try:
+            df = ler_aba_frequencia(nome)
+        except Exception:
+            continue
+        atualizado, n = _renomear_colunas_df(
+            df, antigo, novo, colunas_exatas=_COLUNAS_CODIGO_FREQ_EXATO
+        )
+        if n == 0:
+            continue
+        try:
+            salvar_aba_frequencia(nome, atualizado, list(atualizado.columns))
+            avisos.append(f"{nome}: {n} célula(s)")
+            time.sleep(0.4)
+        except Exception as exc:
+            avisos.append(f"{nome}: não foi possível gravar ({exc})")
+    return avisos
 
 
 def _fmt_data_planilha(valor) -> str:

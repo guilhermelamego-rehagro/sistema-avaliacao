@@ -9,7 +9,7 @@ from config import ICONE_STATUS_PRESENCA, MINUTOS_PRESENCA
 from data.sheets import ler_aba, ler_aba_frequencia
 from domain.ciclos import hoje_normalizado
 from utils.datas import parse_data_planilha_series
-from utils.disciplina import normalizar_id
+from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -40,6 +40,27 @@ def _preparar_entrancia(df_entrancia: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _mapa_ids_legado_calendario(df: pd.DataFrame) -> dict[str, str]:
+    try:
+        from domain.cadastros import carregar_disciplinas
+
+        discs = carregar_disciplinas()
+    except Exception:
+        return {}
+    if discs is None or discs.empty:
+        return {}
+    atuais = {
+        normalizar_id(row["ID_Disciplina"]): str(row.get("Nome_Disciplina", "")).strip()
+        for _, row in discs.iterrows()
+        if normalizar_id(row["ID_Disciplina"])
+    }
+    amostras = []
+    nomes = df["Disciplina"] if "Disciplina" in df.columns else [""] * len(df)
+    for codigo, nome in zip(df.get("ID_Disciplina", []), nomes):
+        amostras.append((str(codigo), str(nome)))
+    return mapa_codigo_disciplina_legado(atuais, amostras)
+
+
 def _preparar_calendario(df_calendario: pd.DataFrame) -> pd.DataFrame:
     df = df_calendario.copy()
     if "ID_Disciplina" not in df.columns:
@@ -49,6 +70,10 @@ def _preparar_calendario(df_calendario: pd.DataFrame) -> pd.DataFrame:
     if "Disciplina" not in df.columns:
         df["Disciplina"] = ""
     df["ID_Disc_Limpo"] = df["ID_Disciplina"].map(normalizar_id)
+    mapa = _mapa_ids_legado_calendario(df)
+    if mapa:
+        df["ID_Disc_Limpo"] = df["ID_Disc_Limpo"].map(lambda v: mapa.get(v, v))
+        df["ID_Disciplina"] = df["ID_Disc_Limpo"]
     df["Data_Formatada"] = pd.to_datetime(
         parse_data_planilha_series(df["Data"]), errors="coerce"
     ).dt.normalize()

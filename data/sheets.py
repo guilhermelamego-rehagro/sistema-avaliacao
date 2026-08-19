@@ -33,7 +33,20 @@ ESCOPO = [
 ]
 
 _CACHE_TTL = 900
-_COLUNAS_TEXTO = ("Sala", "Grupo", "Turma", "Turma_Ingresso", "ID_Disciplina", "ID_Ciclo")
+_COLUNAS_TEXTO = (
+    "Sala",
+    "Grupo",
+    "Turma",
+    "Turma_Ingresso",
+    "ID_Disciplina",
+    "ID_Ciclo",
+    "ID_Matriz",
+    "ID_Carrossel",
+    "ID_Turma",
+    "ID_Oferta",
+    "ID_Trimestre",
+    "Email_Aluno",
+)
 
 
 def _valor_celula_texto(valor) -> str:
@@ -59,7 +72,7 @@ def _normalizar_colunas_texto(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _requisitar_com_retry(func, *args, max_tentativas: int = 4, **kwargs):
+def _requisitar_com_retry(func, *args, max_tentativas: int = 6, **kwargs):
     """Repete leituras da API em caso de limite temporário (HTTP 429)."""
     for tentativa in range(max_tentativas):
         try:
@@ -67,7 +80,7 @@ def _requisitar_com_retry(func, *args, max_tentativas: int = 4, **kwargs):
         except APIError as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status == 429 and tentativa < max_tentativas - 1:
-                time.sleep(2**tentativa + 1)
+                time.sleep(8 * (tentativa + 1))
                 continue
             raise
 
@@ -127,6 +140,18 @@ def conectar_planilha_frequencia():
 
 
 @st.cache_resource(ttl=600)
+def _titulos_abas_avaliacao() -> frozenset:
+    ss = conectar_planilha()
+    return frozenset(ws.title for ws in _requisitar_com_retry(ss.worksheets))
+
+
+@st.cache_resource(ttl=600)
+def _titulos_abas_frequencia() -> frozenset:
+    ss = conectar_planilha_frequencia()
+    return frozenset(ws.title for ws in _requisitar_com_retry(ss.worksheets))
+
+
+@st.cache_resource(ttl=600)
 def _worksheet_avaliacao(nome_aba: str):
     return _requisitar_com_retry(conectar_planilha().worksheet, nome_aba)
 
@@ -136,22 +161,42 @@ def _worksheet_frequencia(nome_aba: str):
     return _requisitar_com_retry(conectar_planilha_frequencia().worksheet, nome_aba)
 
 
-def _garantir_aba(planilha_obj, nome_aba: str, colunas: list[str]):
-    try:
-        planilha_obj.worksheet(nome_aba)
-    except gspread.WorksheetNotFound:
-        ws = planilha_obj.add_worksheet(title=nome_aba, rows=200, cols=len(colunas))
-        ws.append_row(colunas)
+def _criar_aba_se_faltar(planilha_obj, nome_aba: str, colunas: list[str], titulos: set[str]) -> None:
+    if nome_aba in titulos:
+        return
+    ws = planilha_obj.add_worksheet(title=nome_aba, rows=200, cols=max(len(colunas), 8))
+    _requisitar_com_retry(ws.append_row, colunas)
+    titulos.add(nome_aba)
+
+
+def _garantir_aba(planilha_obj, nome_aba: str, colunas: list[str], *, frequencia: bool = False):
+    titulos = set(_titulos_abas_frequencia() if frequencia else _titulos_abas_avaliacao())
+    if nome_aba in titulos:
+        return
+    _criar_aba_se_faltar(planilha_obj, nome_aba, colunas, titulos)
+    if frequencia:
+        _titulos_abas_frequencia.clear()
+    else:
+        _titulos_abas_avaliacao.clear()
 
 
 def _sincronizar_abas_novas():
-    """Cria apenas abas novas do config (Disciplinas, Ciclos etc. são legadas)."""
+    """Cria abas novas com uma listagem só de cada planilha (evita 1 leitura por aba)."""
     p_aval = conectar_planilha()
+    titulos_aval = set(_titulos_abas_avaliacao())
+    faltando_aval = [n for n in ABAS_AVALIACAO if n not in titulos_aval]
+    for nome in faltando_aval:
+        _criar_aba_se_faltar(p_aval, nome, ABAS_AVALIACAO[nome], titulos_aval)
+    if faltando_aval:
+        _titulos_abas_avaliacao.clear()
+
     p_freq = conectar_planilha_frequencia()
-    for nome, colunas in ABAS_AVALIACAO.items():
-        _garantir_aba(p_aval, nome, colunas)
-    for nome, colunas in ABAS_FREQUENCIA.items():
-        _garantir_aba(p_freq, nome, colunas)
+    titulos_freq = set(_titulos_abas_frequencia())
+    faltando_freq = [n for n in ABAS_FREQUENCIA if n not in titulos_freq]
+    for nome in faltando_freq:
+        _criar_aba_se_faltar(p_freq, nome, ABAS_FREQUENCIA[nome], titulos_freq)
+    if faltando_freq:
+        _titulos_abas_frequencia.clear()
 
 
 def preparar_ambiente_planilhas():
@@ -165,13 +210,17 @@ def preparar_ambiente_planilhas():
 def garantir_aba_avaliacao(nome_aba: str):
     if nome_aba not in ABAS_AVALIACAO:
         return
+    if nome_aba in _titulos_abas_avaliacao():
+        return
     _garantir_aba(conectar_planilha(), nome_aba, ABAS_AVALIACAO[nome_aba])
 
 
 def garantir_aba_frequencia(nome_aba: str):
     if nome_aba not in ABAS_FREQUENCIA:
         return
-    _garantir_aba(conectar_planilha_frequencia(), nome_aba, ABAS_FREQUENCIA[nome_aba])
+    if nome_aba in _titulos_abas_frequencia():
+        return
+    _garantir_aba(conectar_planilha_frequencia(), nome_aba, ABAS_FREQUENCIA[nome_aba], frequencia=True)
 
 
 def obter_planilha():

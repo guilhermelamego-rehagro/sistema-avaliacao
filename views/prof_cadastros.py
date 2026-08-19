@@ -12,6 +12,9 @@ from domain.cadastros import (
     carregar_ciclos,
     carregar_disciplinas,
     carregar_professores,
+    pares_codigo_alterado,
+    alinhar_codigos_frequencia,
+    propagar_codigo_disciplina,
     salvar_ciclos,
     salvar_disciplinas,
     salvar_professores,
@@ -88,7 +91,10 @@ def render_disciplinas(usuario: dict):
     st.header("Cadastro de disciplinas")
     st.caption(
         "Cada disciplina aparece recolhida (código e nome). Clique para expandir e editar. "
-        "Deixe **apenas uma** como ativa. "
+        "O **código** é só a disciplina/área (ex.: **TRIB**), sem ano nem trimestre — "
+        "isso fica no planejamento (oferta). Se você alterar um código já usado "
+        "(ex.: 20263TRI → TRIB), o sistema atualiza ciclos, notas, presença e as demais abas. "
+        "Deixe **apenas uma** disciplina como ativa. "
         "**Encontro presencial** habilita as datas e o lançamento de presença no card. "
         "Ao cadastrar, o sistema cria os componentes padrão "
         "(4 ciclos, entrega final, reuniões diárias e atividades individuais). "
@@ -152,7 +158,12 @@ def render_disciplinas(usuario: dict):
                 remover_idx = idx
 
             c1, c2 = st.columns(2)
-            c1.text_input("Código", key=f"disc_id_{idx}_{ver}", placeholder="Ex.: 1 ou GAG-2026-1")
+            c1.text_input(
+                "Código",
+                key=f"disc_id_{idx}_{ver}",
+                placeholder="Ex.: TRIB",
+                help="Sigla estável da disciplina. Ano e trimestre não entram aqui.",
+            )
             c2.text_input("Nome", key=f"disc_nome_{idx}_{ver}")
             c3, c4 = st.columns(2)
             c3.selectbox("Status", STATUS_OPCOES, key=f"disc_status_{idx}_{ver}")
@@ -181,19 +192,50 @@ def render_disciplinas(usuario: dict):
         linhas = [_ler_disciplina_form(i, ver) for i in range(len(st.session_state[chave]))]
         edited = pd.DataFrame(linhas)
         antes = st.session_state[chave].copy()
+        pares = pares_codigo_alterado(antes, edited)
         erro = salvar_disciplinas(edited)
         if erro:
             st.error(erro)
         else:
+            avisos_prop = []
+            if pares:
+                with st.spinner("Atualizando o código nas demais abas da planilha..."):
+                    for antigo, novo in pares:
+                        avisos_prop.extend(
+                            [f"{antigo} → {novo}: {msg}" for msg in propagar_codigo_disciplina(antigo, novo)]
+                        )
+                        registrar_log(
+                            usuario["email"],
+                            usuario["nome"],
+                            f"Renomeou código da disciplina {antigo} → {novo}",
+                        )
             registrar_log(usuario["email"], usuario["nome"], "Atualizou cadastro de disciplinas")
-            avisos, pergunta = _pos_salvar_disciplinas(antes, edited)
+            avisos, pergunta = _pos_salvar_disciplinas(antes, edited, pares_renomeacao=pares)
             st.session_state[chave] = carregar_disciplinas()
             st.session_state[ver_chave] = ver + 1
             if pergunta:
                 st.session_state["cad_disc_pergunta_ef"] = pergunta
-            if avisos:
-                st.session_state["cad_disc_avisos"] = avisos
+            if avisos or avisos_prop:
+                st.session_state["cad_disc_avisos"] = avisos + avisos_prop
             st.success("Disciplinas salvas na planilha.")
+            st.rerun()
+
+    st.caption(
+        "Se o código da disciplina mudou no cadastro (ex.: 20263TRI → TRIB) e as presenças "
+        "sumiram, alinhe a planilha de frequência."
+    )
+    if st.button("Alinhar códigos na planilha de presenças", key="cad_disc_alinhar_freq"):
+        with st.spinner("Lendo calendários e atualizando IDs antigos…"):
+            avisos = alinhar_codigos_frequencia()
+        if not avisos:
+            st.info("Não encontrei código antigo na planilha de presenças. Os IDs já coincidem com o cadastro.")
+        else:
+            registrar_log(
+                usuario["email"],
+                usuario["nome"],
+                "Alinhou códigos de disciplina na planilha de presenças",
+            )
+            st.session_state["cad_disc_avisos"] = avisos
             st.rerun()
 
 
@@ -212,11 +254,16 @@ def _mapa_status_encontro(df: pd.DataFrame) -> dict[str, tuple[str, str]]:
     return mapa
 
 
-def _pos_salvar_disciplinas(antes: pd.DataFrame, depois: pd.DataFrame) -> tuple[list[str], dict | None]:
+def _pos_salvar_disciplinas(
+    antes: pd.DataFrame,
+    depois: pd.DataFrame,
+    pares_renomeacao: list[tuple[str, str]] | None = None,
+) -> tuple[list[str], dict | None]:
     avisos: list[str] = []
     mapa_antes = _mapa_status_encontro(antes)
     mapa_depois = _mapa_status_encontro(depois)
-    ids_novos = [i for i in mapa_depois if i not in mapa_antes]
+    destinos = {novo for _, novo in (pares_renomeacao or [])}
+    ids_novos = [i for i in mapa_depois if i not in mapa_antes and i not in destinos]
     ids_para_modelo = list(ids_novos)
 
     ativos = [i for i, (status, _) in mapa_depois.items() if status == "ativo"]

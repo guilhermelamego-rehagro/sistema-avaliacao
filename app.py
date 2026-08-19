@@ -34,6 +34,7 @@ from navigation import (
     ROTA_COORD_CONFERIR,
     ROTA_COORD_CICLOS,
     ROTA_COORD_DISCIPLINAS,
+    ROTA_COORD_PLANEJAMENTO,
     ROTA_COORD_PROFESSORES,
     ROTA_CURSO_AVALIAR,
     ROTA_FREQ_AULAS,
@@ -58,7 +59,7 @@ from navigation import (
 )
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_cadastros, prof_controle_presenca, prof_liberacao_notas, prof_presenca_encontro
+from views import home_aluno, prof_cadastros, prof_controle_presenca, prof_liberacao_notas, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 
 # 1. Configurações Iniciais da Página
@@ -1011,6 +1012,9 @@ else:
 
     elif menu == ROTA_COORD_DISCIPLINAS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_cadastros.render_disciplinas(aluno)
+
+    elif menu == ROTA_COORD_PLANEJAMENTO and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_planejamento.render(aluno)
 
     elif menu == ROTA_COORD_CICLOS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_cadastros.render_ciclos(aluno)

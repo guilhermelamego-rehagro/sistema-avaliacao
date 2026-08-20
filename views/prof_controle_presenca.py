@@ -12,11 +12,46 @@ from domain.presenca import carregar_base_presenca, compilar_grid_dailies, compi
 from domain.cadastros import carregar_disciplinas
 from utils.disciplina import normalizar_id, remapear_coluna_id_disciplina
 from utils.ordenacao import ordenar_grupos_lista
-from utils.preferencias_sala import multiselect_sala
+
+_PERSIST_TURMA = "presenca_persist_turma"
+_PERSIST_SALA = "presenca_persist_sala"
+_WIDGET_TURMA = "presenca_turma_ui"
+_WIDGET_SALA = "presenca_sala_ui"
 
 
 def _ordenacao_natural(lista) -> list:
     return ordenar_grupos_lista([str(x) for x in lista])
+
+
+def _lista_sessao(chave: str) -> list[str]:
+    val = st.session_state.get(chave) or []
+    if not isinstance(val, list):
+        return [str(val)] if val else []
+    return [str(x) for x in val if str(x).strip()]
+
+
+def _preparar_filtro_persistente(
+    widget_key: str,
+    persist_key: str,
+    opcoes: list[str],
+    *,
+    hidratar: bool,
+) -> None:
+    """Prepara o widget. Só reidrata da persistência ao trocar de tela."""
+    opcoes_set = set(opcoes)
+    if hidratar or widget_key not in st.session_state:
+        persistidos = _lista_sessao(persist_key)
+        st.session_state[widget_key] = [x for x in persistidos if x in opcoes_set]
+        return
+    st.session_state[widget_key] = [x for x in _lista_sessao(widget_key) if x in opcoes_set]
+
+
+def _salvar_filtro_persistente(persist_key: str, opcoes: list[str], selecionado: list[str]) -> None:
+    """Mantém na sessão valores que não aparecem nesta tela; atualiza o restante."""
+    opcoes_set = set(opcoes)
+    fora = [x for x in _lista_sessao(persist_key) if x not in opcoes_set]
+    escolhidos = [str(x) for x in (selecionado or []) if str(x).strip()]
+    st.session_state[persist_key] = fora + [x for x in escolhidos if x not in fora]
 
 
 def render(usuario: dict, tipo: str = "aulas"):
@@ -109,9 +144,14 @@ def render(usuario: dict, tipo: str = "aulas"):
 
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
-    turma_filtro = c1.multiselect("Filtrar por Turma:", turmas_opcoes, key="presenca_turma")
-    with c2:
-        sala_filtro = multiselect_sala(salas_opcoes, key="presenca_sala", usuario=usuario)
+    trocou_tela = st.session_state.get("presenca_ultima_tela") != tipo
+    st.session_state["presenca_ultima_tela"] = tipo
+    _preparar_filtro_persistente(_WIDGET_TURMA, _PERSIST_TURMA, turmas_opcoes, hidratar=trocou_tela)
+    _preparar_filtro_persistente(_WIDGET_SALA, _PERSIST_SALA, salas_opcoes, hidratar=trocou_tela)
+    turma_filtro = c1.multiselect("Filtrar por Turma:", turmas_opcoes, key=_WIDGET_TURMA)
+    sala_filtro = c2.multiselect("Filtrar por Sala:", salas_opcoes, key=_WIDGET_SALA)
+    _salvar_filtro_persistente(_PERSIST_TURMA, turmas_opcoes, turma_filtro)
+    _salvar_filtro_persistente(_PERSIST_SALA, salas_opcoes, sala_filtro)
 
     base_grupos = df_final
     if turma_filtro:
@@ -119,15 +159,16 @@ def render(usuario: dict, tipo: str = "aulas"):
     if sala_filtro:
         base_grupos = base_grupos[base_grupos["Sala"].isin(sala_filtro)]
     grupos_opcoes = _ordenacao_natural(base_grupos["Grupo"].unique())
-    if "presenca_grupo" in st.session_state:
-        atual_grupos = st.session_state.get("presenca_grupo") or []
+    chave_grupo = f"presenca_grupo_{tipo}"
+    if chave_grupo in st.session_state:
+        atual_grupos = st.session_state.get(chave_grupo) or []
         if not isinstance(atual_grupos, list):
             atual_grupos = [atual_grupos] if atual_grupos else []
-        st.session_state["presenca_grupo"] = [g for g in atual_grupos if g in grupos_opcoes]
-    grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes, key="presenca_grupo")
+        st.session_state[chave_grupo] = [g for g in atual_grupos if g in grupos_opcoes]
+    grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes, key=chave_grupo)
 
     c4, c5, c6 = st.columns([2, 2, 1.4])
-    nome_busca = c4.text_input("Buscar por Nome do Aluno:", key="presenca_nome")
+    nome_busca = c4.text_input("Buscar por Nome do Aluno:", key=f"presenca_nome_{tipo}")
     faixa_projetada = c5.slider(
         "Filtrar por % Projetada:",
         min_value=0.0,

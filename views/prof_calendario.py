@@ -430,7 +430,13 @@ def _css_calendario() -> str:
 """
 
 
-def _render_calendario_visual(id_disc: str, *, pode_editar: bool = False, usuario: dict | None = None):
+def _render_calendario_visual(
+    id_disc: str,
+    *,
+    pode_editar: bool = False,
+    usuario: dict | None = None,
+    visao_aluno: bool = False,
+):
     eventos = eventos_por_dia(id_disc)
     detalhes = detalhes_por_dia(id_disc)
     hoje = hoje_normalizado().date()
@@ -453,11 +459,12 @@ def _render_calendario_visual(id_disc: str, *, pode_editar: bool = False, usuari
         "</div>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        "<div class='cal-dica'>💡 Dica: especialista e apresentação de projeto entram na frequência. "
-        "Feriados vêm da lista nacional e de Belo Horizonte; o recesso escolar é o indicado pelo sindicato.</div>",
-        unsafe_allow_html=True,
-    )
+    if not visao_aluno:
+        st.markdown(
+            "<div class='cal-dica'>💡 Dica: especialista e apresentação de projeto entram na frequência. "
+            "Feriados vêm da lista nacional e de Belo Horizonte; o recesso escolar é o indicado pelo sindicato.</div>",
+            unsafe_allow_html=True,
+        )
 
     nav_e, _, nav_d = st.columns([1, 3, 1])
     if nav_e.button("← Meses anteriores", key=f"cal_prev_{id_disc}", width="stretch"):
@@ -732,10 +739,21 @@ def _banner_anotacoes_daily_hoje(usuario: dict | None, id_disc: str):
                 ir_para(ROTA_ANOTACOES_DAILY)
 
 
-def _render_agenda(id_disc: str, *, pode_editar: bool = False, usuario: dict | None = None):
-    _render_calendario_visual(id_disc, pode_editar=pode_editar, usuario=usuario)
+def _render_agenda(
+    id_disc: str,
+    *,
+    pode_editar: bool = False,
+    usuario: dict | None = None,
+    visao_aluno: bool = False,
+):
+    _render_calendario_visual(
+        id_disc,
+        pode_editar=pode_editar,
+        usuario=usuario,
+        visao_aluno=visao_aluno,
+    )
     agenda = agenda_disciplina(id_disc)
-    if agenda.empty:
+    if agenda.empty or visao_aluno:
         return
     ano_atual = hoje_normalizado().date().year
     with st.expander("Ver lista de datas"):
@@ -780,6 +798,7 @@ def render(
     pode_editar: bool | None = None,
     id_disciplina: str | None = None,
     mostrar_cabecalho: bool = True,
+    visao_aluno: bool = False,
 ):
     if pode_editar is None:
         pode_editar = bool(st.session_state.get("modo_coordenador"))
@@ -817,7 +836,7 @@ def render(
         id_disc = normalizar_id(id_disciplina_por_nome(df_disc, nome))
 
     _banner_anotacoes_daily_hoje(usuario, id_disc)
-    _render_agenda(id_disc, pode_editar=pode_editar, usuario=usuario)
+    _render_agenda(id_disc, pode_editar=pode_editar, usuario=usuario, visao_aluno=visao_aluno)
 
     if pode_editar:
         st.markdown("---")

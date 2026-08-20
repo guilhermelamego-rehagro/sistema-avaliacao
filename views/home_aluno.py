@@ -52,6 +52,7 @@ def render(usuario: dict):
             pode_editar=False,
             id_disciplina=id_disc,
             mostrar_cabecalho=False,
+            visao_aluno=True,
         )
 
     st.subheader("Avaliar")

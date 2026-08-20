@@ -110,6 +110,22 @@ def formatar_nota_entrega(nota: float) -> str:
     return f"{float(nota):.1f}".replace(".", ",")
 
 
+TIPO_AVALIACAO_CONFERENCIA = "Conferencia"
+
+
+def _eh_override_conferencia(row) -> bool:
+    """Lançamento da conferência do coordenador (substitui a média da banca)."""
+    tipo = str(row.get("Tipo", "") or "").strip().lower()
+    if tipo in {"conferencia", "conferência", "override", "override_coord"}:
+        return True
+    comentario = str(row.get("Comentario", "") or "").strip().lower()
+    return comentario.startswith("lançamento coordenador") or comentario.startswith(
+        "lancamento coordenador"
+    ) or comentario.startswith("conferência coordenador") or comentario.startswith(
+        "conferencia coordenador"
+    )
+
+
 def salvar_avaliacao_grupo(
     id_ciclo: str,
     nome_ciclo: str,
@@ -181,7 +197,9 @@ def obter_avaliacao_grupo(
     grupo: str,
     sala: str = "",
     id_disciplina: str | None = None,
+    email_avaliador: str | None = None,
 ) -> dict | None:
+    """Última avaliação do grupo. Com email_avaliador, só a desse professor."""
     try:
         df = ler_aba("Avaliacao_Grupo")
     except Exception:
@@ -192,6 +210,17 @@ def obter_avaliacao_grupo(
     filtro = filtrar_avaliacoes_grupo(df, id_disciplina, id_ciclo, grupo, sala or None)
     if filtro.empty:
         return None
+    if email_avaliador is not None:
+        email = str(email_avaliador).strip().lower()
+        if not email or email in {"nan", "none"}:
+            return None
+        if "Email_Avaliador" not in filtro.columns:
+            return None
+        filtro = filtro[
+            filtro["Email_Avaliador"].astype(str).str.lower().str.strip() == email
+        ]
+        if filtro.empty:
+            return None
     if "Data" in filtro.columns:
         filtro = filtro.copy()
         filtro["_ordem"] = pd.to_datetime(filtro["Data"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
@@ -202,6 +231,75 @@ def obter_avaliacao_grupo(
         "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
         "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
         "comentario": str(row.get("Comentario", "")),
+        "email_avaliador": str(row.get("Email_Avaliador", "")).strip().lower(),
+        "nome_avaliador": str(row.get("Nome_Avaliador", "")).strip(),
+    }
+
+
+def obter_media_avaliacao_grupo(
+    id_ciclo: str,
+    grupo: str,
+    sala: str = "",
+    id_disciplina: str | None = None,
+) -> dict | None:
+    """Nota oficial do grupo: override da conferência, senão média por professor."""
+    try:
+        df = ler_aba("Avaliacao_Grupo")
+    except Exception:
+        return None
+    if df.empty:
+        return None
+
+    filtro = filtrar_avaliacoes_grupo(df, id_disciplina, id_ciclo, grupo, sala or None)
+    if filtro.empty:
+        return None
+
+    filtro = filtro.copy()
+    if "Email_Avaliador" not in filtro.columns:
+        filtro["Email_Avaliador"] = ""
+    if "Tipo" not in filtro.columns:
+        filtro["Tipo"] = ""
+    if "Comentario" not in filtro.columns:
+        filtro["Comentario"] = ""
+    if "Data" in filtro.columns:
+        filtro["_ordem"] = pd.to_datetime(
+            filtro["Data"], format="%d/%m/%Y %H:%M:%S", errors="coerce"
+        )
+        filtro = filtro.sort_values("_ordem", na_position="last")
+
+    overrides = filtro[filtro.apply(_eh_override_conferencia, axis=1)]
+    if not overrides.empty:
+        row = overrides.iloc[-1]
+        return {
+            "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
+            "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
+            "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
+            "n_avaliadores": 1,
+            "origem": "conferencia",
+            "comentario": str(row.get("Comentario", "")),
+            "nome_avaliador": str(row.get("Nome_Avaliador", "")).strip(),
+        }
+
+    banca = filtro[~filtro.apply(_eh_override_conferencia, axis=1)]
+    if banca.empty:
+        return None
+
+    banca["_avaliador"] = banca["Email_Avaliador"].astype(str).str.lower().str.strip()
+    ultimas = banca.groupby("_avaliador", sort=False).tail(1)
+    if ultimas.empty:
+        return None
+
+    aps = [float_nota_planilha(v) for v in ultimas["Nota_Apresentacao"].tolist()]
+    cts = [float_nota_planilha(v) for v in ultimas["Nota_Conteudo"].tolist()]
+    tots = [float_nota_planilha(v) for v in ultimas["Nota_Total"].tolist()]
+    n = len(ultimas)
+    return {
+        "nota_apresentacao": round(sum(aps) / n, 2),
+        "nota_conteudo": round(sum(cts) / n, 2),
+        "nota_total": round(sum(tots) / n, 2),
+        "n_avaliadores": n,
+        "origem": "media_banca",
+        "comentario": "",
     }
 
 
@@ -248,8 +346,20 @@ def carregar_mapa_notas_orientador(id_disciplina: str) -> dict[tuple[str, str], 
     return mapa
 
 
-def carregar_mapa_avaliacoes_grupo(id_disciplina: str) -> dict[tuple[str, str, str], dict]:
-    """Retorna {(grupo, sala, id_ciclo): última avaliação do grupo}."""
+def carregar_mapa_avaliacoes_grupo(
+    id_disciplina: str,
+    email_avaliador: str | None = None,
+    *,
+    media: bool = False,
+    somente_conferencia: bool = False,
+) -> dict[tuple[str, str, str], dict]:
+    """Retorna {(grupo, sala, id_ciclo): avaliação}.
+
+    - email_avaliador: última nota desse professor
+    - media=True: nota oficial (override da conferência ou média da banca)
+    - somente_conferencia: só lançamentos da conferência do coordenador
+    - padrão: última nota de qualquer avaliador (legado)
+    """
     try:
         df = ler_aba("Avaliacao_Grupo")
     except Exception:
@@ -264,6 +374,26 @@ def carregar_mapa_avaliacoes_grupo(id_disciplina: str) -> dict[tuple[str, str, s
     if "Sala" not in df.columns:
         df = df.copy()
         df["Sala"] = ""
+    if "Email_Avaliador" not in df.columns:
+        df = df.copy()
+        df["Email_Avaliador"] = ""
+    if "Tipo" not in df.columns:
+        df = df.copy()
+        df["Tipo"] = ""
+    if "Comentario" not in df.columns:
+        df = df.copy()
+        df["Comentario"] = ""
+
+    if somente_conferencia:
+        df = df[df.apply(_eh_override_conferencia, axis=1)]
+        if df.empty:
+            return {}
+
+    if email_avaliador:
+        email = str(email_avaliador).strip().lower()
+        df = df[df["Email_Avaliador"].astype(str).str.lower().str.strip() == email]
+        if df.empty:
+            return {}
 
     if "Data" in df.columns:
         df = df.copy()
@@ -271,13 +401,56 @@ def carregar_mapa_avaliacoes_grupo(id_disciplina: str) -> dict[tuple[str, str, s
         df = df.sort_values("_ordem", na_position="last")
 
     mapa: dict[tuple[str, str, str], dict] = {}
-    for (grupo, sala, id_ciclo), grupo_df in df.groupby(
-        [
-            df["Grupo"].astype(str).str.strip(),
-            df["Sala"].astype(str).str.strip(),
-            df["ID_Ciclo"].astype(str).str.strip(),
-        ]
-    ):
+    chaves = [
+        df["Grupo"].astype(str).str.strip(),
+        df["Sala"].astype(str).str.strip(),
+        df["ID_Ciclo"].astype(str).str.strip(),
+    ]
+    if media and not email_avaliador:
+        df = df.copy()
+        if "Tipo" not in df.columns:
+            df["Tipo"] = ""
+        if "Comentario" not in df.columns:
+            df["Comentario"] = ""
+        df["_avaliador"] = df["Email_Avaliador"].astype(str).str.lower().str.strip()
+        for (grupo, sala, id_ciclo), grupo_df in df.groupby(
+            [
+                df["Grupo"].astype(str).str.strip(),
+                df["Sala"].astype(str).str.strip(),
+                df["ID_Ciclo"].astype(str).str.strip(),
+            ]
+        ):
+            overrides = grupo_df[grupo_df.apply(_eh_override_conferencia, axis=1)]
+            if not overrides.empty:
+                row = overrides.iloc[-1]
+                mapa[(grupo, sala, id_ciclo)] = {
+                    "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
+                    "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
+                    "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
+                    "n_avaliadores": 1,
+                    "origem": "conferencia",
+                }
+                continue
+            banca = grupo_df[~grupo_df.apply(_eh_override_conferencia, axis=1)]
+            if banca.empty:
+                continue
+            ultimas = banca.groupby("_avaliador", sort=False).tail(1)
+            if ultimas.empty:
+                continue
+            n = len(ultimas)
+            ap = sum(float_nota_planilha(v) for v in ultimas["Nota_Apresentacao"].tolist()) / n
+            ct = sum(float_nota_planilha(v) for v in ultimas["Nota_Conteudo"].tolist()) / n
+            tot = sum(float_nota_planilha(v) for v in ultimas["Nota_Total"].tolist()) / n
+            mapa[(grupo, sala, id_ciclo)] = {
+                "nota_apresentacao": round(ap, 2),
+                "nota_conteudo": round(ct, 2),
+                "nota_total": round(tot, 2),
+                "n_avaliadores": n,
+                "origem": "media_banca",
+            }
+        return mapa
+
+    for (grupo, sala, id_ciclo), grupo_df in df.groupby(chaves):
         row = grupo_df.iloc[-1]
         mapa[(grupo, sala, id_ciclo)] = {
             "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
@@ -285,6 +458,107 @@ def carregar_mapa_avaliacoes_grupo(id_disciplina: str) -> dict[tuple[str, str, s
             "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
         }
     return mapa
+
+
+def carregar_painel_conferencia(
+    id_disciplina: str,
+) -> dict[tuple[str, str, str], dict]:
+    """Painel da conferência: nota oficial + detalhe por avaliador.
+
+    Retorna {(grupo, sala, id_ciclo): {
+        oficial: {nota_apresentacao, nota_conteudo, nota_total, origem, n_avaliadores},
+        avaliadores: [{nome, email, notas..., eh_conferencia}],
+    }}
+    """
+    try:
+        df = ler_aba("Avaliacao_Grupo")
+    except Exception:
+        return {}
+    if df.empty:
+        return {}
+
+    df = filtrar_avaliacoes_grupo(df, id_disciplina=id_disciplina)
+    if df.empty:
+        return {}
+
+    df = df.copy()
+    if "Sala" not in df.columns:
+        df["Sala"] = ""
+    if "Email_Avaliador" not in df.columns:
+        df["Email_Avaliador"] = ""
+    if "Nome_Avaliador" not in df.columns:
+        df["Nome_Avaliador"] = ""
+    if "Tipo" not in df.columns:
+        df["Tipo"] = ""
+    if "Comentario" not in df.columns:
+        df["Comentario"] = ""
+    if "Data" in df.columns:
+        df["_ordem"] = pd.to_datetime(df["Data"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+        df = df.sort_values("_ordem", na_position="last")
+
+    df["_avaliador"] = df["Email_Avaliador"].astype(str).str.lower().str.strip()
+    df["_conferencia"] = df.apply(_eh_override_conferencia, axis=1)
+
+    painel: dict[tuple[str, str, str], dict] = {}
+    for (grupo, sala, id_ciclo), grupo_df in df.groupby(
+        [
+            df["Grupo"].astype(str).str.strip(),
+            df["Sala"].astype(str).str.strip(),
+            df["ID_Ciclo"].astype(str).str.strip(),
+        ]
+    ):
+        avaliadores = []
+        for _, bloco in grupo_df.groupby("_avaliador", sort=False):
+            row = bloco.iloc[-1]
+            nome = str(row.get("Nome_Avaliador", "")).strip() or str(
+                row.get("Email_Avaliador", "")
+            ).strip()
+            avaliadores.append(
+                {
+                    "nome": nome,
+                    "email": str(row.get("Email_Avaliador", "")).strip().lower(),
+                    "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
+                    "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
+                    "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
+                    "eh_conferencia": bool(row.get("_conferencia")),
+                }
+            )
+
+        overrides = grupo_df[grupo_df["_conferencia"]]
+        if not overrides.empty:
+            row = overrides.iloc[-1]
+            oficial = {
+                "nota_apresentacao": float_nota_planilha(row.get("Nota_Apresentacao", 0)),
+                "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
+                "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
+                "n_avaliadores": 1,
+                "origem": "conferencia",
+            }
+        else:
+            banca = grupo_df[~grupo_df["_conferencia"]]
+            if banca.empty:
+                continue
+            ultimas = banca.groupby("_avaliador", sort=False).tail(1)
+            n = len(ultimas)
+            oficial = {
+                "nota_apresentacao": round(
+                    sum(float_nota_planilha(v) for v in ultimas["Nota_Apresentacao"]) / n, 2
+                ),
+                "nota_conteudo": round(
+                    sum(float_nota_planilha(v) for v in ultimas["Nota_Conteudo"]) / n, 2
+                ),
+                "nota_total": round(
+                    sum(float_nota_planilha(v) for v in ultimas["Nota_Total"]) / n, 2
+                ),
+                "n_avaliadores": n,
+                "origem": "media_banca",
+            }
+
+        painel[(grupo, sala, id_ciclo)] = {
+            "oficial": oficial,
+            "avaliadores": sorted(avaliadores, key=lambda a: a["nome"].lower()),
+        }
+    return painel
 
 
 def listar_comentarios_banca_grupo(
@@ -317,6 +591,8 @@ def listar_comentarios_banca_grupo(
         filtro["Comentario"] = ""
     if "Nome_Ciclo" not in filtro.columns:
         filtro["Nome_Ciclo"] = ""
+    if "Tipo" not in filtro.columns:
+        filtro["Tipo"] = ""
 
     if "Data" in filtro.columns:
         filtro["_ordem"] = pd.to_datetime(
@@ -326,11 +602,13 @@ def listar_comentarios_banca_grupo(
 
     filtro["_ciclo"] = filtro["ID_Ciclo"].astype(str).str.strip()
     filtro["_avaliador"] = filtro["Email_Avaliador"].astype(str).str.lower().str.strip()
+    filtro["_conferencia"] = filtro.apply(_eh_override_conferencia, axis=1)
 
     registros: list[dict] = []
     for _, bloco in filtro.groupby(["_ciclo", "_avaliador"], sort=False):
         row = bloco.iloc[-1]
         comentario = str(row.get("Comentario", "") or "").strip()
+        eh_conf = bool(row.get("_conferencia"))
         registros.append(
             {
                 "id_ciclo": str(row.get("ID_Ciclo", "")).strip(),
@@ -343,6 +621,7 @@ def listar_comentarios_banca_grupo(
                 "nota_conteudo": float_nota_planilha(row.get("Nota_Conteudo", 0)),
                 "nota_total": float_nota_planilha(row.get("Nota_Total", 0)),
                 "data": str(row.get("Data", "")).strip(),
+                "eh_conferencia": eh_conf,
             }
         )
     return registros

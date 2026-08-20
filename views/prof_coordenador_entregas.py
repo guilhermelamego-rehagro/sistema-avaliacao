@@ -9,8 +9,8 @@ import streamlit as st
 
 from data.sheets import ler_aba
 from domain.avaliacoes import (
-    buscar_avaliacao_grupo_mapa,
-    carregar_mapa_avaliacoes_grupo,
+    TIPO_AVALIACAO_CONFERENCIA,
+    carregar_painel_conferencia,
     formatar_nota_entrega,
     parse_nota_entrega,
     salvar_avaliacao_grupo,
@@ -161,6 +161,29 @@ def _css_matriz(n_ciclos: int) -> str:
     font-size: 0.82rem;
     box-sizing: border-box;
 }}
+.st-key-coord_ent_matriz .coord-nota {{
+    background-color: #f5f5f5;
+    color: #222;
+    font-weight: 600;
+    padding: 0;
+    text-align: center;
+    border-radius: 4px;
+    border: 1px solid #e0e0e0;
+    height: {_ALTURA_CAMPO_REM}rem;
+    min-height: {_ALTURA_CAMPO_REM}rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.82rem;
+    box-sizing: border-box;
+    cursor: help;
+}}
+.st-key-coord_ent_matriz .coord-nota-conf,
+.st-key-coord_ent_matriz .coord-total.coord-nota-conf {{
+    background-color: #fff3e0;
+    border-color: #ffcc80;
+    color: #e65100;
+}}
 .st-key-coord_ent_matriz .coord-header {{
     font-size: 0.76rem;
     font-weight: 700;
@@ -226,6 +249,10 @@ def _col_total(codigo: str) -> str:
     return f"{codigo}_T"
 
 
+def _col_origem(codigo: str) -> str:
+    return f"{codigo}_O"
+
+
 def _slug(texto: str) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "_", str(texto).strip()).strip("_") or "x"
 
@@ -236,6 +263,39 @@ def _widget_key(id_disc: str, grupo, sala, cod: str, campo: str) -> str:
 
 def _chave_grupo_sala(grupo, sala) -> tuple[str, str]:
     return str(grupo).strip(), str(sala).strip()
+
+
+def _info_painel(
+    painel: dict[tuple[str, str, str], dict],
+    grupo: str,
+    sala: str,
+    id_ciclo: str,
+) -> dict | None:
+    grupo = str(grupo).strip()
+    sala = str(sala).strip()
+    id_ciclo = str(id_ciclo).strip()
+    return painel.get((grupo, sala, id_ciclo)) or painel.get((grupo, "", id_ciclo))
+
+
+def _tooltip_painel(info: dict | None) -> str:
+    if not info or not info.get("oficial"):
+        return "Sem avaliações da banca"
+    oficial = info["oficial"]
+    if oficial.get("origem") == "conferencia":
+        cabeca = "Nota da conferência (substitui a média)"
+    else:
+        n = oficial.get("n_avaliadores") or 0
+        cabeca = f"Média da banca ({n} professor(es))"
+    linhas = [cabeca]
+    for a in info.get("avaliadores") or []:
+        marca = " [conferência]" if a.get("eh_conferencia") else ""
+        linhas.append(
+            f"{a.get('nome', '?')}{marca}: "
+            f"A {formatar_nota_entrega(a['nota_apresentacao'])} · "
+            f"C {formatar_nota_entrega(a['nota_conteudo'])} · "
+            f"T {formatar_nota_entrega(a['nota_total'])}"
+        )
+    return "\n".join(linhas)
 
 
 def _calcular_total_celula(ap_txt: str, ct_txt: str) -> str:
@@ -286,7 +346,7 @@ def _listar_grupos_disciplina(entrancia: pd.DataFrame) -> pd.DataFrame:
 def _montar_grid(
     grupos: pd.DataFrame,
     ciclos: pd.DataFrame,
-    mapa: dict[tuple[str, str, str], dict],
+    painel: dict[tuple[str, str, str], dict],
     codigos: dict[str, str],
 ) -> pd.DataFrame:
     linhas = []
@@ -298,15 +358,18 @@ def _montar_grid(
             nome = str(ciclo["Nome_Ciclo"])
             cod = codigos[nome]
             id_ciclo = str(ciclo["ID_Ciclo"]).strip()
-            aval = buscar_avaliacao_grupo_mapa(mapa, grupo, sala, id_ciclo)
+            info = _info_painel(painel, grupo, sala, id_ciclo)
+            aval = (info or {}).get("oficial")
             if aval:
                 linha[_col_ap(cod)] = formatar_nota_entrega(aval["nota_apresentacao"])
                 linha[_col_ct(cod)] = formatar_nota_entrega(aval["nota_conteudo"])
                 linha[_col_total(cod)] = formatar_nota_entrega(aval["nota_total"])
+                linha[_col_origem(cod)] = str(aval.get("origem") or "")
             else:
                 linha[_col_ap(cod)] = ""
                 linha[_col_ct(cod)] = ""
-                linha[_col_total(cod)] = "0,0"
+                linha[_col_total(cod)] = ""
+                linha[_col_origem(cod)] = ""
         linhas.append(linha)
     return ordenar_df_grupos(pd.DataFrame(linhas))
 
@@ -347,6 +410,9 @@ def _sincronizar_campos(
         grupo, sala = row["Grupo"], row["Sala"]
         for nome in nomes_ciclos_visiveis:
             cod = codigos[nome]
+            edit_key = _widget_key(id_disc, grupo, sala, cod, "edit")
+            if st.session_state.get(edit_key) and not forcar:
+                continue
             ap_key = _widget_key(id_disc, grupo, sala, cod, "ap")
             ct_key = _widget_key(id_disc, grupo, sala, cod, "ct")
             tot_key = _widget_key(id_disc, grupo, sala, cod, "tot")
@@ -388,18 +454,25 @@ def _coletar_editado(
     codigos: dict[str, str],
     nomes_ciclos_visiveis: list[str],
 ) -> pd.DataFrame:
+    """Coleta só células em modo alteração; as demais repetem o valor oficial."""
     linhas = []
     for _, row in df_grid.iterrows():
         grupo, sala = row["Grupo"], row["Sala"]
         linha = {"Grupo": grupo, "Sala": sala}
         for nome in nomes_ciclos_visiveis:
             cod = codigos[nome]
-            ap_key = _widget_key(id_disc, grupo, sala, cod, "ap")
-            ct_key = _widget_key(id_disc, grupo, sala, cod, "ct")
-            tot_key = _widget_key(id_disc, grupo, sala, cod, "tot")
-            linha[_col_ap(cod)] = str(st.session_state.get(ap_key, "")).strip()
-            linha[_col_ct(cod)] = str(st.session_state.get(ct_key, "")).strip()
-            linha[_col_total(cod)] = str(st.session_state.get(tot_key, "0,0")).strip()
+            edit_key = _widget_key(id_disc, grupo, sala, cod, "edit")
+            if st.session_state.get(edit_key):
+                ap_key = _widget_key(id_disc, grupo, sala, cod, "ap")
+                ct_key = _widget_key(id_disc, grupo, sala, cod, "ct")
+                tot_key = _widget_key(id_disc, grupo, sala, cod, "tot")
+                linha[_col_ap(cod)] = str(st.session_state.get(ap_key, "")).strip()
+                linha[_col_ct(cod)] = str(st.session_state.get(ct_key, "")).strip()
+                linha[_col_total(cod)] = str(st.session_state.get(tot_key, "")).strip()
+            else:
+                linha[_col_ap(cod)] = str(row[_col_ap(cod)]).strip()
+                linha[_col_ct(cod)] = str(row[_col_ct(cod)]).strip()
+                linha[_col_total(cod)] = str(row.get(_col_total(cod), "")).strip()
         linhas.append(linha)
     return pd.DataFrame(linhas)
 
@@ -461,10 +534,10 @@ def _salvar_validas(validas: list, id_disciplina: str, usuario: dict) -> int:
             grupo=grupo,
             nota_apresentacao=nota_ap,
             nota_conteudo=nota_ct,
-            comentario="Lançamento coordenador — conferência de entregas",
+            comentario=f"Conferência coordenador — {usuario.get('nome', '')}",
             email_avaliador=usuario["email"],
-            nome_avaliador=f"Coord. {usuario['nome']}",
-            tipo=_inferir_tipo_ciclo(nome_ciclo),
+            nome_avaliador=usuario["nome"],
+            tipo=TIPO_AVALIACAO_CONFERENCIA,
         )
         salvos += 1
     return salvos
@@ -498,42 +571,89 @@ def _render_linha(
     id_disc: str,
     nomes_ciclos_visiveis: list[str],
     codigos: dict[str, str],
+    painel: dict[tuple[str, str, str], dict],
+    ciclos: pd.DataFrame,
 ):
-    cols[0].markdown(f'<div class="coord-sala" title="{sala}">{sala}</div>', unsafe_allow_html=True)
-    cols[1].markdown(f'<div class="coord-grupo">{grupo}</div>', unsafe_allow_html=True)
+    import html as html_mod
+
+    cols[0].markdown(f'<div class="coord-sala" title="{html_mod.escape(sala)}">{html_mod.escape(sala)}</div>', unsafe_allow_html=True)
+    cols[1].markdown(f'<div class="coord-grupo">{html_mod.escape(str(grupo))}</div>', unsafe_allow_html=True)
+
+    mapa_ciclo_id = {
+        str(r["Nome_Ciclo"]): str(r["ID_Ciclo"]).strip() for _, r in ciclos.iterrows()
+    }
 
     for i, nome in enumerate(nomes_ciclos_visiveis):
         cod = codigos[nome]
         base = 2 + i * 3
+        id_ciclo = mapa_ciclo_id.get(nome, "")
+        info = _info_painel(painel, str(grupo), sala, id_ciclo)
+        tip = html_mod.escape(_tooltip_painel(info))
+        origem = ""
+        if info and info.get("oficial"):
+            origem = str(info["oficial"].get("origem") or "")
+
         ap_key = _widget_key(id_disc, grupo, sala, cod, "ap")
         ct_key = _widget_key(id_disc, grupo, sala, cod, "ct")
         tot_key = _widget_key(id_disc, grupo, sala, cod, "tot")
+        edit_key = _widget_key(id_disc, grupo, sala, cod, "edit")
 
-        cols[base].text_input(
-            f"{cod}·A",
-            label_visibility="collapsed",
-            key=ap_key,
-            on_change=_on_campo_change,
-            args=(id_disc, grupo, sala, cod, "ap"),
-        )
-        cols[base + 1].text_input(
-            f"{cod}·C",
-            label_visibility="collapsed",
-            key=ct_key,
-            on_change=_on_campo_change,
-            args=(id_disc, grupo, sala, cod, "ct"),
-        )
-        total = str(st.session_state.get(tot_key, "0,0"))
-        cols[base + 2].markdown(
-            f'<div class="coord-total">{total}</div>',
-            unsafe_allow_html=True,
-        )
+        editando = bool(st.session_state.get(edit_key))
+        if editando:
+            cols[base].text_input(
+                f"{cod}·A",
+                label_visibility="collapsed",
+                key=ap_key,
+                on_change=_on_campo_change,
+                args=(id_disc, grupo, sala, cod, "ap"),
+            )
+            cols[base + 1].text_input(
+                f"{cod}·C",
+                label_visibility="collapsed",
+                key=ct_key,
+                on_change=_on_campo_change,
+                args=(id_disc, grupo, sala, cod, "ct"),
+            )
+            total = str(st.session_state.get(tot_key, "0,0"))
+            cols[base + 2].markdown(
+                f'<div class="coord-total" title="{tip}">{html_mod.escape(total)}</div>',
+                unsafe_allow_html=True,
+            )
+            cols[base + 2].checkbox("Alt.", key=edit_key, help="Desmarque para cancelar a edição")
+        else:
+            ap = str(st.session_state.get(ap_key, "")).strip()
+            ct = str(st.session_state.get(ct_key, "")).strip()
+            tot = str(st.session_state.get(tot_key, "")).strip()
+            if not tot and (ap or ct):
+                tot = _calcular_total_celula(ap, ct)
+            marca = " *" if origem == "conferencia" else ""
+            cls_extra = " coord-nota-conf" if origem == "conferencia" else ""
+            cols[base].markdown(
+                f'<div class="coord-nota{cls_extra}" title="{tip}">{html_mod.escape(ap or "—")}{marca}</div>',
+                unsafe_allow_html=True,
+            )
+            cols[base + 1].markdown(
+                f'<div class="coord-nota{cls_extra}" title="{tip}">{html_mod.escape(ct or "—")}{marca}</div>',
+                unsafe_allow_html=True,
+            )
+            cols[base + 2].markdown(
+                f'<div class="coord-total{cls_extra}" title="{tip}">{html_mod.escape(tot or "—")}{marca}</div>',
+                unsafe_allow_html=True,
+            )
+            cols[base + 2].checkbox(
+                "Alt.",
+                key=edit_key,
+                help="Marque para alterar esta nota (grava como conferência e substitui a média)",
+            )
 
 
 def render(usuario: dict):
     st.header("Conferir notas grupos")
     st.caption(
-        "Lance **A** e **C** (0 a 5). O **T** recalcula ao sair do campo. "
+        "Visão da **média da banca** (A / C / T). Passe o mouse na nota para ver "
+        "quais professores avaliaram. Marque **Alt.** para editar: o lançamento grava "
+        "como **conferência** e **substitui a média**. "
+        "Asterisco (*) = já há nota de conferência. "
         "Colunas com largura fixa — ao rolar, **Sala** e **Gr.** permanecem visíveis."
     )
 
@@ -596,8 +716,8 @@ def render(usuario: dict):
     codigos_visiveis = {n: codigos[n] for n in nomes_ciclos_visiveis}
     ciclos_visiveis_df = ciclos[ciclos["Nome_Ciclo"].astype(str).isin(nomes_ciclos_visiveis)]
 
-    mapa = carregar_mapa_avaliacoes_grupo(id_disc)
-    df_grid = _montar_grid(grupos, ciclos, mapa, codigos)
+    painel = carregar_painel_conferencia(id_disc)
+    df_grid = _montar_grid(grupos, ciclos, painel, codigos)
     pendentes = _contar_pendentes(df_grid, codigos_visiveis)
 
     m1, m2, m3 = st.columns(3)
@@ -610,7 +730,7 @@ def render(usuario: dict):
 
     ctx = (
         f"{id_disc}|{filtro_sala}|{filtro_grupo}|"
-        f"{','.join(nomes_ciclos_visiveis)}|{len(df_grid)}"
+        f"{','.join(nomes_ciclos_visiveis)}|{len(df_grid)}|{len(painel)}"
     )
     if st.session_state.get("_coord_ent_ctx") != ctx:
         st.session_state["_coord_ent_ctx"] = ctx
@@ -623,7 +743,7 @@ def render(usuario: dict):
     st.markdown(_css_matriz(len(nomes_ciclos_visiveis)), unsafe_allow_html=True)
     st.markdown(_css_invalidos(invalidos), unsafe_allow_html=True)
 
-    st.subheader("Lançamento por grupo")
+    st.subheader("Conferência por grupo")
     with st.container(key="coord_ent_matriz"):
         pesos = _pesos_colunas(len(nomes_ciclos_visiveis))
         _render_cabecalho(st.columns(pesos), nomes_ciclos_visiveis, codigos)
@@ -635,9 +755,11 @@ def render(usuario: dict):
                 id_disc,
                 nomes_ciclos_visiveis,
                 codigos,
+                painel,
+                ciclos_visiveis_df,
             )
 
-    if st.button("💾 Salvar lançamentos", type="primary", width="stretch"):
+    if st.button("💾 Salvar alterações da conferência", type="primary", width="stretch"):
         df_editado = _coletar_editado(df_grid, id_disc, codigos, nomes_ciclos_visiveis)
         invalidas, validas = _validar_alteracoes(
             df_grid, df_editado, ciclos_visiveis_df, codigos
@@ -661,7 +783,12 @@ def render(usuario: dict):
                 f"Conferência entregas {disc_sel} ({salvos} lançamentos)",
             )
             st.session_state.pop("_coord_ent_ctx", None)
-            st.success(f"{salvos} avaliação(ões) de grupo salva(s)!")
+            # Sai do modo edição nas células salvas
+            for _, grupo, sala, _id_ciclo, nome_ciclo, _ap, _ct in validas:
+                cod = codigos.get(nome_ciclo)
+                if cod:
+                    st.session_state[_widget_key(id_disc, grupo, sala, cod, "edit")] = False
+            st.success(f"{salvos} nota(s) de conferência salva(s) (substituem a média)!")
             st.rerun()
         else:
-            st.info("Nenhuma alteração detectada.")
+            st.info("Nenhuma alteração detectada. Marque **Alt.** nas notas que quiser mudar.")

@@ -102,7 +102,13 @@ def avaliacao_entregas_aberta(id_disciplina: str, id_ciclo: str) -> tuple[bool, 
     return True, ""
 
 
-def listar_grupos_avaliados(id_disciplina: str, id_ciclo: str, sala: str = "") -> set[str]:
+def listar_grupos_avaliados(
+    id_disciplina: str,
+    id_ciclo: str,
+    sala: str = "",
+    email_avaliador: str | None = None,
+) -> set[str]:
+    """Grupos com avaliação no ciclo/sala. Se email_avaliador for informado, só as dele."""
     try:
         df = ler_aba("Avaliacao_Grupo")
     except Exception:
@@ -110,6 +116,18 @@ def listar_grupos_avaliados(id_disciplina: str, id_ciclo: str, sala: str = "") -
     filtro = filtrar_avaliacoes_grupo(df, id_disciplina, id_ciclo, sala=sala or None)
     if filtro.empty:
         return set()
+    if email_avaliador is not None:
+        email = str(email_avaliador).strip().lower()
+        # Sem e-mail válido: não atribuir avaliações de terceiros / legado a este usuário.
+        if not email or email in {"nan", "none"}:
+            return set()
+        if "Email_Avaliador" not in filtro.columns:
+            return set()
+        filtro = filtro[
+            filtro["Email_Avaliador"].astype(str).str.lower().str.strip() == email
+        ]
+        if filtro.empty:
+            return set()
     return set(filtro["Grupo"].astype(str).str.strip().unique())
 
 

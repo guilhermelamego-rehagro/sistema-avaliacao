@@ -8,20 +8,28 @@ import streamlit as st
 from domain.cadastros import (
     COLUNAS_CICLOS,
     ENCONTRO_OPCOES,
+    PAPEIS_DISCIPLINA,
     STATUS_OPCOES,
-    TIPOS_PROFESSOR_CONFIG,
     carregar_ciclos,
     carregar_disciplinas,
     carregar_professores,
+    carregar_professores_disciplina,
+    listar_professores_cadastro,
     normalizar_df_ciclos_editor,
     pares_codigo_alterado,
     alinhar_codigos_frequencia,
     alinhar_codigos_ciclos,
+    papel_padrao_do_cadastro,
+    papel_permite_especialista,
+    papel_permite_orientador,
     propagar_codigo_disciplina,
+    salas_da_disciplina,
     salvar_ciclos,
     salvar_disciplinas,
-    salvar_professores,
+    substituir_professores_ciclo,
+    substituir_professores_disciplina,
 )
+from domain.ciclos import ciclos_da_disciplina, ordenar_ciclos
 from domain.encontro_presencial import (
     carregar_datas_encontro,
     normalizar_df_datas_editor,
@@ -32,8 +40,21 @@ from domain.modelo_padrao import (
     entrega_final_ja_separada,
     garantir_estrutura_padrao,
 )
-from utils.disciplina import normalizar_id
+from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa, normalizar_id
 from utils.logs import registrar_log
+
+
+def _seed(chave: str, valor):
+    if chave not in st.session_state:
+        st.session_state[chave] = valor
+
+
+def _seed_opcao(chave: str, valor, opcoes: list[str]):
+    if not opcoes:
+        return
+    atual = st.session_state.get(chave)
+    if atual not in opcoes:
+        st.session_state[chave] = valor if valor in opcoes else opcoes[0]
 
 
 def _ids_disciplina(df_disc: pd.DataFrame) -> list[str]:
@@ -549,120 +570,407 @@ def render_ciclos(usuario: dict):
             st.success("Códigos alinhados.")
 
 
+def _bloco_professores_ciclo(
+    df_prof: pd.DataFrame, id_disciplina: str, id_ciclo: str
+) -> pd.DataFrame:
+    if df_prof is None or df_prof.empty:
+        return pd.DataFrame()
+    id_disc = normalizar_id(id_disciplina)
+    id_cic = normalizar_id(id_ciclo)
+    return df_prof[
+        (df_prof["ID_Disciplina"].map(normalizar_id) == id_disc)
+        & (df_prof["ID_Ciclo"].map(normalizar_id) == id_cic)
+    ].copy()
+
+
+def _mapa_vinculos_ciclo(bloco: pd.DataFrame) -> dict[str, dict]:
+    """Chave = e-mail (ou nome em minúsculas se sem e-mail) → papéis no ciclo."""
+    mapa: dict[str, dict] = {}
+    if bloco is None or bloco.empty:
+        return mapa
+    for _, row in bloco.iterrows():
+        email = str(row.get("Email", "")).strip().lower()
+        nome = str(row.get("Professor", "")).strip()
+        chave = email or nome.lower()
+        if not chave or chave in {"nan", "none"}:
+            continue
+        info = mapa.setdefault(
+            chave,
+            {"email": email, "nome": nome, "orientador": False, "sala": "", "especialista": False},
+        )
+        if nome and not info["nome"]:
+            info["nome"] = nome
+        if email and not info["email"]:
+            info["email"] = email
+        tipo = str(row.get("Tipo", "")).strip().title()
+        if tipo == "Orientador":
+            info["orientador"] = True
+            sala = str(row.get("Sala", "")).strip()
+            if sala and sala.lower() not in {"nan", "none"}:
+                info["sala"] = sala
+        elif tipo == "Especialista":
+            info["especialista"] = True
+    return mapa
+
+
+def _mapa_pool_disciplina(pool: pd.DataFrame) -> dict[str, dict]:
+    mapa: dict[str, dict] = {}
+    if pool is None or pool.empty:
+        return mapa
+    for _, row in pool.iterrows():
+        email = str(row.get("Email", "")).strip().lower()
+        nome = str(row.get("Professor", "")).strip()
+        papel = str(row.get("Papel", "")).strip()
+        if not email:
+            continue
+        mapa[email] = {"email": email, "nome": nome, "papel": papel}
+    return mapa
+
+
 def render_professores(usuario: dict):
     st.header("Cadastro de professores")
     st.caption(
-        "Edita a aba **Config_Professores**. Reaproveita disciplina, ciclo, tipo e sala "
-        "já preenchidos na planilha. Orientador é filtrado pela **sala** do aluno; "
-        "especialista vale para todas as salas do ciclo."
+        "1) Em **Professores desta disciplina** (recolhido), associe quem pode atuar e o papel. "
+        "2) Nos **ciclos**, só aparecem esses professores. "
+        "Orientador exige sala; especialista vale para todas as salas."
     )
     df_disc = carregar_disciplinas()
+    if df_disc.empty:
+        st.warning("Cadastre disciplinas antes de vincular professores.")
+        return
     df_ciclos = carregar_ciclos()
-    ids_disc = _ids_disciplina(df_disc)
-    ids_ciclo = sorted(
-        {str(x).strip() for x in df_ciclos["ID_Ciclo"].tolist() if str(x).strip()}
+    cadastro = listar_professores_cadastro()
+    df_prof = carregar_professores()
+
+    lista_disc = [
+        str(n).strip()
+        for n in df_disc["Nome_Disciplina"].tolist()
+        if str(n).strip() and str(n).strip().lower() not in {"nan", "none"}
+    ]
+    lista_disc = list(dict.fromkeys(lista_disc))
+    if not lista_disc:
+        st.warning("Nenhuma disciplina com nome cadastrado.")
+        return
+    nome_disc = st.selectbox(
+        "Disciplina:",
+        lista_disc,
+        index=indice_disciplina_ativa(df_disc, lista_disc),
+        key="cad_prof_disc",
     )
-    if not ids_ciclo:
-        st.warning("Cadastre ciclos antes de vincular professores.")
+    id_disc = normalizar_id(id_disciplina_por_nome(df_disc, nome_disc))
+    pool = carregar_professores_disciplina(id_disc)
+    pool_mapa = _mapa_pool_disciplina(pool)
+
+    if cadastro.empty:
+        st.warning(
+            "Não há professores no cadastro (Base_Alunos com perfil Professor). "
+            "Cadastre-os antes de associar à disciplina."
+        )
+
+    n_pool = len(pool_mapa)
+    titulo_pool = (
+        f"Professores desta disciplina · {n_pool} vinculado(s)"
+        if n_pool
+        else "Professores desta disciplina · nenhum vinculado"
+    )
+    with st.expander(titulo_pool, expanded=False):
+        st.caption(
+            "Associação feita normalmente uma vez no semestre. "
+            "Marque quem pode atuar e o papel (Orientador, Especialista ou Ambos). "
+            "Depois, edite os vínculos em cada ciclo."
+        )
+        if cadastro.empty:
+            st.info("Sem professores no cadastro para montar o pool.")
+        else:
+            for _, p in cadastro.iterrows():
+                email = str(p["Email"]).strip().lower()
+                nome = str(p["Nome"]).strip()
+                tipo_cad = str(p.get("Tipo_Cadastro", "")).strip()
+                atual = pool_mapa.get(email)
+                k_chk = f"cad_prof_pool_{id_disc}_{email}"
+                k_papel = f"cad_prof_papel_{id_disc}_{email}"
+                _seed(k_chk, atual is not None)
+                papel_sug = (
+                    atual["papel"]
+                    if atual and atual.get("papel") in PAPEIS_DISCIPLINA
+                    else papel_padrao_do_cadastro(tipo_cad)
+                )
+                _seed_opcao(k_papel, papel_sug, PAPEIS_DISCIPLINA)
+                c1, c2 = st.columns([3, 2])
+                rotulo = nome if not tipo_cad else f"{nome} (cadastro: {tipo_cad})"
+                c1.checkbox(rotulo, key=k_chk)
+                c2.selectbox(
+                    "Papel na disciplina",
+                    PAPEIS_DISCIPLINA,
+                    key=k_papel,
+                    label_visibility="collapsed",
+                )
+
+            if st.button(
+                "Salvar professores da disciplina",
+                type="primary",
+                key=f"cad_prof_pool_salvar_{id_disc}",
+            ):
+                linhas = []
+                for _, p in cadastro.iterrows():
+                    email = str(p["Email"]).strip().lower()
+                    nome = str(p["Nome"]).strip()
+                    if not st.session_state.get(f"cad_prof_pool_{id_disc}_{email}"):
+                        continue
+                    papel = str(st.session_state.get(f"cad_prof_papel_{id_disc}_{email}", "")).strip()
+                    if papel not in PAPEIS_DISCIPLINA:
+                        st.error(f"Papel inválido para {nome}.")
+                        return
+                    linhas.append(
+                        {
+                            "Disciplina": nome_disc,
+                            "ID_Disciplina": id_disc,
+                            "Professor": nome,
+                            "Email": email,
+                            "Papel": papel,
+                        }
+                    )
+                with st.spinner("Salvando pool da disciplina…"):
+                    erro = substituir_professores_disciplina(id_disc, nome_disc, linhas)
+                if erro:
+                    st.error(erro)
+                else:
+                    registrar_log(
+                        usuario["email"],
+                        usuario["nome"],
+                        f"Atualizou professores da disciplina {id_disc}",
+                    )
+                    st.success(
+                        f"Pool da disciplina salvo ({len(linhas)} professor(es)). "
+                        "Vínculos de ciclo incompatíveis com o novo papel foram alinhados."
+                    )
+                    st.rerun()
+
+    if pool.empty:
+        st.info("Associe ao menos um professor à disciplina para configurar os ciclos.")
         return
 
-    chave = "cad_prof_edit_v2"
-    if chave not in st.session_state:
-        st.session_state[chave] = carregar_professores()
+    st.subheader("Vínculos por ciclo")
+    ciclos = ordenar_ciclos(ciclos_da_disciplina(df_ciclos, id_disc))
+    if ciclos.empty:
+        st.warning("Esta disciplina ainda não tem ciclos cadastrados.")
+        return
 
-    c_disc, c_ciclo = st.columns(2)
-    filtro_disc = c_disc.selectbox(
-        "Filtrar por disciplina:",
-        ["(todas)"] + [_rotulo_disc(df_disc, i) for i in ids_disc],
-        key="cad_prof_filtro_disc",
-    )
-    id_disc_filtro = ""
-    if filtro_disc != "(todas)":
-        id_disc_filtro = filtro_disc.split(" — ")[0].strip()
-
-    ciclos_opcoes = df_ciclos
-    if id_disc_filtro:
-        ciclos_opcoes = df_ciclos[
-            df_ciclos["ID_Disciplina"].astype(str).str.strip() == id_disc_filtro
-        ]
-    opcoes_ciclo = []
-    mapa_ciclo: dict[str, str] = {}
-    for _, row in ciclos_opcoes.iterrows():
-        cid = str(row["ID_Ciclo"]).strip()
-        if not cid:
-            continue
-        rotulo = f"{cid} — {row.get('Nome_Ciclo', '')}"
-        opcoes_ciclo.append(rotulo)
-        mapa_ciclo[rotulo] = cid
-        mapa_ciclo[cid] = cid
-
-    filtro_ciclo = c_ciclo.selectbox(
-        "Filtrar por ciclo:",
-        ["(todos)"] + opcoes_ciclo,
-        key=f"cad_prof_filtro_ciclo_{id_disc_filtro or 'todas'}",
-    )
-
-    df_edit = st.session_state[chave].copy()
-    if id_disc_filtro:
-        df_edit = df_edit[df_edit["ID_Disciplina"].astype(str).str.strip() == id_disc_filtro]
-    if filtro_ciclo != "(todos)":
-        id_ciclo_filtro = mapa_ciclo.get(filtro_ciclo, filtro_ciclo.split(" — ")[0].strip())
-        df_edit = df_edit[df_edit["ID_Ciclo"].astype(str).str.strip() == id_ciclo_filtro]
-    else:
-        id_ciclo_filtro = ""
-
-    visiveis = ["ID_Disciplina", "ID_Ciclo", "Professor", "Tipo", "Sala"]
-    for col in visiveis:
-        if col not in df_edit.columns:
-            df_edit[col] = ""
-    df_visivel = df_edit[visiveis].copy()
-
-    tipos = list(
-        dict.fromkeys(
-            TIPOS_PROFESSOR_CONFIG
-            + [t for t in df_visivel["Tipo"].astype(str).str.strip() if t]
+    salas = salas_da_disciplina(id_disc)
+    if not salas:
+        st.info(
+            "Nenhuma sala encontrada na entrância desta disciplina. "
+            "Cadastre salas na entrância para vincular orientadores."
         )
-    )
-    edited = st.data_editor(
-        df_visivel,
-        column_config={
-            "ID_Disciplina": st.column_config.SelectboxColumn(
-                "Disciplina", options=ids_disc, required=True
-            ),
-            "ID_Ciclo": st.column_config.SelectboxColumn("Ciclo", options=ids_ciclo, required=True),
-            "Professor": st.column_config.TextColumn("Nome do professor", required=True),
-            "Tipo": st.column_config.SelectboxColumn("Tipo", options=tipos),
-            "Sala": st.column_config.TextColumn("Sala", help="Obrigatório para orientador."),
-        },
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key=f"editor_professores_{id_disc_filtro}_{id_ciclo_filtro}",
-    )
 
-    if st.button("Salvar professores", type="primary"):
-        base = st.session_state[chave].copy()
-        if id_ciclo_filtro and id_disc_filtro:
-            mesmo_disc = base[base["ID_Disciplina"].astype(str).str.strip() == id_disc_filtro]
-            resto = pd.concat(
-                [
-                    base[base["ID_Disciplina"].astype(str).str.strip() != id_disc_filtro],
-                    mesmo_disc[mesmo_disc["ID_Ciclo"].astype(str).str.strip() != id_ciclo_filtro],
-                ],
-                ignore_index=True,
-            )
-        elif id_ciclo_filtro:
-            resto = base[base["ID_Ciclo"].astype(str).str.strip() != id_ciclo_filtro]
-        elif id_disc_filtro:
-            resto = base[base["ID_Disciplina"].astype(str).str.strip() != id_disc_filtro]
-        else:
-            resto = base.iloc[0:0]
-        df_save = pd.concat([resto, edited], ignore_index=True)
-        erro = salvar_professores(df_save)
-        if erro:
-            st.error(erro)
-        else:
-            registrar_log(usuario["email"], usuario["nome"], "Atualizou Config_Professores")
-            st.session_state[chave] = carregar_professores()
-            st.success("Professores salvos na planilha.")
-            st.rerun()
+    emails_pool = set(pool_mapa.keys())
+    candidatos_ori = [
+        info for info in pool_mapa.values() if papel_permite_orientador(info.get("papel", ""))
+    ]
+    candidatos_esp = [
+        info for info in pool_mapa.values() if papel_permite_especialista(info.get("papel", ""))
+    ]
+    candidatos_ori = sorted(candidatos_ori, key=lambda x: x.get("nome", "").lower())
+    candidatos_esp = sorted(candidatos_esp, key=lambda x: x.get("nome", "").lower())
+
+    for _, ciclo in ciclos.iterrows():
+        id_ciclo = normalizar_id(ciclo.get("ID_Ciclo", ""))
+        nome_ciclo = str(ciclo.get("Nome_Ciclo", "")).strip() or id_ciclo
+        if not id_ciclo:
+            continue
+        bloco = _bloco_professores_ciclo(df_prof, id_disc, id_ciclo)
+        vinculos = _mapa_vinculos_ciclo(bloco)
+        emails_vinculados = {v["email"] for v in vinculos.values() if v.get("email")}
+        nomes_vinculados = {
+            str(v.get("nome", "")).strip().lower()
+            for v in vinculos.values()
+            if str(v.get("nome", "")).strip()
+        }
+
+        pendentes = []
+        for info in pool_mapa.values():
+            email = info["email"]
+            nome = str(info.get("nome", "")).strip().lower()
+            if email in emails_vinculados or nome in nomes_vinculados:
+                continue
+            pendentes.append(str(info.get("nome") or email).strip())
+
+        n_ori = sum(1 for v in vinculos.values() if v.get("orientador"))
+        n_esp = sum(1 for v in vinculos.values() if v.get("especialista"))
+        titulo = f"{nome_ciclo} · {n_ori} orientador(es) · {n_esp} especialista(s)"
+        if pendentes:
+            titulo = f"{titulo} · {len(pendentes)} pendente(s)"
+
+        with st.expander(titulo, expanded=False):
+            if pendentes:
+                st.caption(
+                    "Pendentes neste ciclo (no pool da disciplina, ainda sem vínculo): "
+                    + ", ".join(pendentes)
+                )
+            else:
+                st.caption("Todos os professores do pool já têm vínculo neste ciclo.")
+
+            orfaos = []
+            for chave, info in vinculos.items():
+                email = str(info.get("email") or "").strip().lower()
+                if email and email in emails_pool:
+                    continue
+                orfaos.append(info)
+
+            st.markdown("**Orientadores** (obrigatório informar a sala)")
+            if not candidatos_ori and not orfaos:
+                st.caption("Nenhum professor com papel Orientador/Ambos nesta disciplina.")
+            else:
+                for p in candidatos_ori:
+                    email = p["email"]
+                    nome = p["nome"]
+                    info = vinculos.get(email) or vinculos.get(nome.lower()) or {}
+                    k_chk = f"cad_prof_ori_{id_disc}_{id_ciclo}_{email}"
+                    k_sala = f"cad_prof_sala_{id_disc}_{id_ciclo}_{email}"
+                    _seed(k_chk, bool(info.get("orientador")))
+                    sala_atual = str(info.get("sala") or "")
+                    opcoes_sala = list(salas)
+                    if sala_atual and sala_atual not in opcoes_sala:
+                        opcoes_sala = [sala_atual] + opcoes_sala
+                    if not opcoes_sala:
+                        opcoes_sala = [sala_atual] if sala_atual else [""]
+                    _seed_opcao(
+                        k_sala,
+                        sala_atual if sala_atual in opcoes_sala else opcoes_sala[0],
+                        opcoes_sala,
+                    )
+                    c1, c2 = st.columns([3, 2])
+                    c1.checkbox(nome, key=k_chk)
+                    c2.selectbox(
+                        "Sala",
+                        opcoes_sala,
+                        key=k_sala,
+                        label_visibility="collapsed",
+                        disabled=not opcoes_sala or opcoes_sala == [""],
+                    )
+                for info in orfaos:
+                    if not info.get("orientador"):
+                        continue
+                    email = str(info.get("email") or "").strip().lower()
+                    nome = str(info.get("nome") or "").strip() or email or "Sem nome"
+                    chave = email or nome.lower()
+                    k_chk = f"cad_prof_ori_{id_disc}_{id_ciclo}_{chave}"
+                    k_sala = f"cad_prof_sala_{id_disc}_{id_ciclo}_{chave}"
+                    _seed(k_chk, True)
+                    sala_atual = str(info.get("sala") or "")
+                    opcoes_sala = list(salas)
+                    if sala_atual and sala_atual not in opcoes_sala:
+                        opcoes_sala = [sala_atual] + opcoes_sala
+                    if not opcoes_sala:
+                        opcoes_sala = [sala_atual] if sala_atual else [""]
+                    _seed_opcao(
+                        k_sala,
+                        sala_atual if sala_atual in opcoes_sala else opcoes_sala[0],
+                        opcoes_sala,
+                    )
+                    c1, c2 = st.columns([3, 2])
+                    c1.checkbox(f"{nome} (fora do pool)", key=k_chk)
+                    c2.selectbox(
+                        "Sala",
+                        opcoes_sala,
+                        key=k_sala,
+                        label_visibility="collapsed",
+                        disabled=not opcoes_sala or opcoes_sala == [""],
+                    )
+
+            st.markdown("**Especialistas** (todas as salas)")
+            if not candidatos_esp and not any(o.get("especialista") for o in orfaos):
+                st.caption("Nenhum professor com papel Especialista/Ambos nesta disciplina.")
+            else:
+                for p in candidatos_esp:
+                    email = p["email"]
+                    nome = p["nome"]
+                    info = vinculos.get(email) or vinculos.get(nome.lower()) or {}
+                    k_chk = f"cad_prof_esp_{id_disc}_{id_ciclo}_{email}"
+                    _seed(k_chk, bool(info.get("especialista")))
+                    st.checkbox(nome, key=k_chk)
+                for info in orfaos:
+                    if not info.get("especialista"):
+                        continue
+                    email = str(info.get("email") or "").strip().lower()
+                    nome = str(info.get("nome") or "").strip() or email or "Sem nome"
+                    chave = email or nome.lower()
+                    k_chk = f"cad_prof_esp_{id_disc}_{id_ciclo}_{chave}"
+                    _seed(k_chk, True)
+                    st.checkbox(f"{nome} (fora do pool)", key=k_chk)
+
+            if st.button(
+                f"Salvar vínculos — {nome_ciclo}",
+                type="primary",
+                key=f"cad_prof_salvar_{id_disc}_{id_ciclo}",
+            ):
+                linhas = []
+                candidatos = []
+                vistos = set()
+                for p in candidatos_ori + candidatos_esp:
+                    email = p["email"]
+                    if email in vistos:
+                        continue
+                    vistos.add(email)
+                    candidatos.append({"email": email, "nome": p["nome"], "chave": email})
+                for info in orfaos:
+                    email = str(info.get("email") or "").strip().lower()
+                    nome = str(info.get("nome") or "").strip()
+                    chave = email or nome.lower()
+                    if chave in vistos:
+                        continue
+                    vistos.add(chave)
+                    candidatos.append({"email": email, "nome": nome, "chave": chave})
+
+                for c in candidatos:
+                    email = c["email"]
+                    nome = c["nome"]
+                    chave = c.get("chave") or email or nome.lower()
+                    if st.session_state.get(f"cad_prof_ori_{id_disc}_{id_ciclo}_{chave}"):
+                        sala = str(
+                            st.session_state.get(f"cad_prof_sala_{id_disc}_{id_ciclo}_{chave}", "")
+                        ).strip()
+                        if sala.lower() in {"", "nan", "none", "nat"}:
+                            st.error(
+                                f"Informe a sala do orientador **{nome}**. "
+                                "Se a lista de salas estiver vazia, cadastre a entrância da disciplina."
+                            )
+                            return
+                        linhas.append(
+                            {
+                                "Disciplina": nome_disc,
+                                "Ciclo": nome_ciclo,
+                                "ID_Disciplina": id_disc,
+                                "ID_Ciclo": id_ciclo,
+                                "Professor": nome,
+                                "Email": email,
+                                "Tipo": "Orientador",
+                                "Sala": sala,
+                            }
+                        )
+                    if st.session_state.get(f"cad_prof_esp_{id_disc}_{id_ciclo}_{chave}"):
+                        linhas.append(
+                            {
+                                "Disciplina": nome_disc,
+                                "Ciclo": nome_ciclo,
+                                "ID_Disciplina": id_disc,
+                                "ID_Ciclo": id_ciclo,
+                                "Professor": nome,
+                                "Email": email,
+                                "Tipo": "Especialista",
+                                "Sala": "",
+                            }
+                        )
+
+                with st.spinner("Salvando vínculos…"):
+                    erro = substituir_professores_ciclo(id_disc, id_ciclo, linhas)
+                if erro:
+                    st.error(erro)
+                else:
+                    registrar_log(
+                        usuario["email"],
+                        usuario["nome"],
+                        f"Atualizou professores do ciclo {id_ciclo} ({id_disc})",
+                    )
+                    st.success(f"Vínculos do ciclo **{nome_ciclo}** salvos.")
+                    st.rerun()

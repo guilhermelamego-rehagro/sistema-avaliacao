@@ -32,6 +32,7 @@ PARES = [("20262GEN", "GENT"), ("20263TRI", "TRIB")]
 ABAS = [
     "Ciclos",
     "Config_Professores",
+    "Config_Professores_Disciplina",
     "Entrancia_Turma",
     "Avaliacoes",
     "Respostas_Curso",

@@ -89,6 +89,13 @@ ABAS_AVALIACAO = {
         "Nome_Lancador",
         "Data_Lancamento",
     ],
+    "Config_Professores_Disciplina": [
+        "Disciplina",
+        "ID_Disciplina",
+        "Professor",
+        "Email",
+        "Papel",
+    ],
     "Anotacoes_Daily": [
         "Data",
         "ID_Disciplina",

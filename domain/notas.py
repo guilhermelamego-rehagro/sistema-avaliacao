@@ -6,7 +6,7 @@ import pandas as pd
 
 from config import PESO_ORIENTADOR, PESO_PARES
 from data.sheets import ler_aba
-from domain.avaliacoes import formatar_nota_entrega, obter_avaliacao_grupo, obter_nota_orientador
+from domain.avaliacoes import formatar_nota_entrega, obter_media_avaliacao_grupo, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina
 from domain.encontro_presencial import resolver_id_ciclo_componente
@@ -58,7 +58,7 @@ def _nota_pares_ciclo(email: str, id_ciclo: str) -> float | None:
 
 
 def _nota_grupo_ciclo(grupo: str, id_ciclo: str, sala: str = "") -> float | None:
-    aval = obter_avaliacao_grupo(id_ciclo, grupo, sala)
+    aval = obter_media_avaliacao_grupo(id_ciclo, grupo, sala)
     if not aval:
         return None
     return float(aval["nota_total"])

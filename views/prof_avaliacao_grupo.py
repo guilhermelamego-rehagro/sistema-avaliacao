@@ -43,7 +43,12 @@ def _render_status_grupos(grupos: list[str], avaliados: set[str]):
 
 def render(usuario: dict):
     st.header("Lançar notas da banca")
-    st.caption("Lance apresentação e conteúdo técnico (0 a 5 cada). A nota total do grupo vai de 0 a 10.")
+    st.caption(
+        "Lance apresentação e conteúdo técnico (0 a 5 cada). "
+        "Cada professor registra a própria avaliação; a nota final do grupo é a média de todos."
+    )
+
+    email_prof = str(usuario.get("email") or "").strip().lower()
 
     df_disc = ler_aba("Disciplinas")
     lista_disc = df_disc["Nome_Disciplina"].unique().tolist()
@@ -113,10 +118,15 @@ def render(usuario: dict):
 
     ordem_map = carregar_ordem_apresentacao(id_disc, id_ciclo, sala_sel)
     grupos = ordenar_grupos(grupos_base, ordem_map)
-    avaliados = listar_grupos_avaliados(id_disc, id_ciclo, sala_sel)
+    avaliados = listar_grupos_avaliados(
+        id_disc, id_ciclo, sala_sel, email_avaliador=email_prof
+    )
 
     st.subheader(f"Status dos grupos — Sala {sala_sel}")
-    st.caption("A numeração à esquerda é a ordem de apresentação (não confundir com o nome do grupo).")
+    st.caption(
+        "Status **para você**: pendente até você lançar. "
+        "A numeração à esquerda é a ordem de apresentação."
+    )
     _render_status_grupos(grupos, avaliados)
 
     chave = _chave_grupo(id_disc, id_ciclo, sala_sel)
@@ -130,17 +140,19 @@ def render(usuario: dict):
 
     grupo_sel = st.selectbox("Grupo:", grupos, key=chave)
 
-    existente = obter_avaliacao_grupo(id_ciclo, grupo_sel, sala_sel, id_disc)
+    existente = obter_avaliacao_grupo(
+        id_ciclo, grupo_sel, sala_sel, id_disc, email_avaliador=email_prof
+    )
 
     if existente:
         st.success(
-            f"Grupo **{grupo_sel}** (sala **{sala_sel}**) já avaliado — "
+            f"Você já avaliou o grupo **{grupo_sel}** (sala **{sala_sel}**) — "
             f"Apresentação **{formatar_nota_entrega(existente['nota_apresentacao'])}** | "
             f"Conteúdo **{formatar_nota_entrega(existente['nota_conteudo'])}** | "
             f"Total **{formatar_nota_entrega(existente['nota_total'])}**"
         )
     else:
-        st.info(f"Grupo **{grupo_sel}** ainda não avaliado neste ciclo.")
+        st.info(f"Grupo **{grupo_sel}** ainda sem a sua avaliação neste ciclo.")
 
     valor_ap = float(existente["nota_apresentacao"]) if existente else None
     valor_ct = float(existente["nota_conteudo"]) if existente else None
@@ -169,15 +181,15 @@ def render(usuario: dict):
         confirmar_sub = False
         if existente:
             confirmar_sub = st.checkbox(
-                "Confirmo que desejo registrar uma **nova** avaliação para este grupo "
-                "(substitui a anterior nos cálculos — histórico permanece na planilha)."
+                "Confirmo que desejo registrar uma **nova** avaliação minha para este grupo "
+                "(substitui a minha anterior nos cálculos — histórico permanece na planilha)."
             )
         salvar = st.form_submit_button("Salvar avaliação do grupo", type="primary", width="stretch")
 
     if salvar:
         if existente and not confirmar_sub:
             st.warning(
-                "Este grupo já foi avaliado. Marque a confirmação acima para registrar uma nova avaliação."
+                "Você já avaliou este grupo. Marque a confirmação acima para registrar uma nova avaliação."
             )
         else:
             nota_ap = parse_nota_entrega(nota_ap_txt)

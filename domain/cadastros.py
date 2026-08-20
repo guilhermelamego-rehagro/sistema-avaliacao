@@ -8,7 +8,14 @@ import time
 import pandas as pd
 
 from config import ABAS_AVALIACAO, ABAS_FREQUENCIA
-from data.sheets import garantir_colunas_avaliacao, ler_aba, ler_aba_frequencia, salvar_aba, salvar_aba_frequencia
+from data.sheets import (
+    garantir_aba_avaliacao,
+    garantir_colunas_avaliacao,
+    ler_aba,
+    ler_aba_frequencia,
+    salvar_aba,
+    salvar_aba_frequencia,
+)
 from utils.datas import parse_data_planilha, parse_data_planilha_series
 from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id
 
@@ -37,11 +44,13 @@ COLUNAS_PROFESSORES = [
     "ID_Disciplina",
     "ID_Ciclo",
     "Professor",
+    "Email",
     "Tipo",
     "Sala",
 ]
 ALIAS_PROFESSORES = {
     "Professor": ("Nome", "Nome_Professor", "Professor(a)"),
+    "Email": ("Email_Professor", "E-mail", "Email_Pessoal", "Mail"),
     "Tipo": ("Tipo_Professor", "Tipo Professor", "Função", "Funcao", "Papel"),
     "Sala": ("Sala_Turma", "Sala Turma", "Turma", "Sala_Aluno"),
     "ID_Ciclo": ("Id_Ciclo", "Ciclo_ID"),
@@ -50,6 +59,14 @@ ALIAS_PROFESSORES = {
 
 STATUS_OPCOES = ["ativo", "inativo"]
 TIPOS_PROFESSOR_CONFIG = ["Orientador", "Especialista"]
+PAPEIS_DISCIPLINA = ["Orientador", "Especialista", "Ambos"]
+COLUNAS_PROFESSORES_DISCIPLINA = [
+    "Disciplina",
+    "ID_Disciplina",
+    "Professor",
+    "Email",
+    "Papel",
+]
 
 
 def _garantir_colunas(df: pd.DataFrame, obrigatorias: list[str]) -> pd.DataFrame:
@@ -122,6 +139,7 @@ _ABAS_CODIGO_AVALIACAO = [
     "Disciplinas",
     "Ciclos",
     "Config_Professores",
+    "Config_Professores_Disciplina",
     "Entrancia_Turma",
     "Avaliacoes",
     "Respostas_Curso",
@@ -472,8 +490,40 @@ def _preencher_alias(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _preencher_email_base_alunos(df: pd.DataFrame) -> pd.DataFrame:
+    """Completa Email vazio a partir de Base_Alunos (nome ou e-mail já conhecido)."""
+    if df.empty:
+        return df
+    out = df.copy()
+    if "Email" not in out.columns:
+        out["Email"] = ""
+    out["Email"] = out["Email"].astype(str).str.strip().str.lower()
+    out.loc[out["Email"].isin(["nan", "none"]), "Email"] = ""
+    try:
+        base = ler_aba("Base_Alunos")
+    except Exception:
+        return out
+    if base.empty or "Nome_Completo" not in base.columns:
+        return out
+    col_email = "Email_Pessoal" if "Email_Pessoal" in base.columns else None
+    if not col_email:
+        return out
+    mapa_nome = {}
+    for _, row in base.iterrows():
+        nome = str(row.get("Nome_Completo", "")).strip().lower()
+        email = str(row.get(col_email, "")).strip().lower()
+        if nome and email and email not in {"nan", "none"}:
+            mapa_nome[nome] = email
+    vazios = out["Email"].eq("")
+    if vazios.any() and "Professor" in out.columns:
+        out.loc[vazios, "Email"] = (
+            out.loc[vazios, "Professor"].astype(str).str.strip().str.lower().map(mapa_nome).fillna("")
+        )
+    return out
+
+
 def _preencher_tipo_base_alunos(df: pd.DataFrame) -> pd.DataFrame:
-    """Se Tipo estiver vazio, tenta o Tipo_Professor da Base_Alunos pelo nome."""
+    """Se Tipo estiver vazio, tenta o Tipo_Professor da Base_Alunos pelo e-mail ou nome."""
     if df.empty or "Professor" not in df.columns:
         return df
     try:
@@ -487,18 +537,29 @@ def _preencher_tipo_base_alunos(df: pd.DataFrame) -> pd.DataFrame:
             break
     if col_tipo is None or "Nome_Completo" not in base.columns:
         return df
-    mapa = {}
+    mapa_nome = {}
+    mapa_email = {}
+    col_email = "Email_Pessoal" if "Email_Pessoal" in base.columns else None
     for _, row in base.iterrows():
         nome = str(row.get("Nome_Completo", "")).strip().lower()
         tipo = str(row.get(col_tipo, "")).strip().title()
         if nome and tipo and tipo.lower() not in {"", "nan", "none"}:
-            mapa[nome] = tipo
+            mapa_nome[nome] = tipo
+        if col_email:
+            email = str(row.get(col_email, "")).strip().lower()
+            if email and tipo and tipo.lower() not in {"", "nan", "none"}:
+                mapa_email[email] = tipo
     out = df.copy()
+
     def _tipo(row):
         atual = str(row.get("Tipo", "")).strip()
         if atual and atual.lower() not in {"nan", "none"}:
             return atual
-        return mapa.get(str(row.get("Professor", "")).strip().lower(), "")
+        email = str(row.get("Email", "")).strip().lower()
+        if email and email in mapa_email:
+            return mapa_email[email]
+        return mapa_nome.get(str(row.get("Professor", "")).strip().lower(), "")
+
     out["Tipo"] = out.apply(_tipo, axis=1)
     return out
 
@@ -555,12 +616,15 @@ def carregar_professores() -> pd.DataFrame:
     df["ID_Ciclo"] = df["ID_Ciclo"].map(normalizar_id)
     df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
     df["Professor"] = df["Professor"].astype(str).str.strip()
+    df["Email"] = df["Email"].astype(str).str.strip().str.lower()
+    df.loc[df["Email"].isin(["nan", "none"]), "Email"] = ""
     df["Tipo"] = df["Tipo"].astype(str).str.strip().str.title()
     df.loc[df["Tipo"].str.lower().isin(["nan", "none", ""]), "Tipo"] = ""
     df["Sala"] = df["Sala"].map(
         lambda x: "" if str(x).strip().lower() in {"nan", "none", ""} else str(x).strip()
     )
     df = _completar_ids_e_nomes_professor(df)
+    df = _preencher_email_base_alunos(df)
     df = _preencher_tipo_base_alunos(df)
     df["Tipo"] = df["Tipo"].astype(str).str.strip().str.title()
     df.loc[df["Tipo"].str.lower().isin(["nan", "none"]), "Tipo"] = ""
@@ -570,39 +634,325 @@ def carregar_professores() -> pd.DataFrame:
 def salvar_professores(df: pd.DataFrame) -> str | None:
     df = _garantir_colunas(df, COLUNAS_PROFESSORES)
     df = _completar_ids_e_nomes_professor(df)
+    df = _preencher_email_base_alunos(df)
     df["ID_Ciclo"] = df["ID_Ciclo"].map(normalizar_id)
     df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
     df["Professor"] = df["Professor"].astype(str).str.strip()
+    df["Email"] = df["Email"].astype(str).str.strip().str.lower()
+    df.loc[df["Email"].isin(["nan", "none"]), "Email"] = ""
     df["Tipo"] = df["Tipo"].astype(str).str.strip().str.title()
     df.loc[df["Tipo"].str.lower().isin(["nan", "none"]), "Tipo"] = ""
-    df["Sala"] = df["Sala"].astype(str).str.strip()
-    df.loc[df["Sala"].str.lower().isin(["nan", "none"]), "Sala"] = ""
+    df["Sala"] = df["Sala"].map(_sala_professor_norm)
     df = df[df["Professor"].ne("") | df["ID_Ciclo"].ne("")]
     if df.empty:
-        return "Informe ao menos um professor."
+        try:
+            garantir_colunas_avaliacao("Config_Professores", COLUNAS_PROFESSORES)
+        except Exception:
+            pass
+        salvar_aba("Config_Professores", df, COLUNAS_PROFESSORES)
+        return None
     if df["ID_Ciclo"].eq("").any():
         return "Cada linha precisa do ID do ciclo."
     if df["Professor"].eq("").any():
         return "Cada linha precisa do nome do professor."
-    orientadores = df[df["Tipo"] == "Orientador"]
-    if not orientadores.empty and orientadores["Sala"].eq("").any():
-        return "Orientador precisa da sala (é filtrado pela sala do aluno na avaliação do curso)."
+    # Remove vínculos legados incompletos (orientador sem sala) em vez de bloquear o save.
+    incompletos = df[(df["Tipo"] == "Orientador") & (df["Sala"].eq(""))].copy()
+    if not incompletos.empty:
+        df = df[~((df["Tipo"] == "Orientador") & (df["Sala"].eq("")))].copy()
+    if df.empty:
+        try:
+            garantir_colunas_avaliacao("Config_Professores", COLUNAS_PROFESSORES)
+        except Exception:
+            pass
+        salvar_aba("Config_Professores", df, COLUNAS_PROFESSORES)
+        return None
+    try:
+        garantir_colunas_avaliacao("Config_Professores", COLUNAS_PROFESSORES)
+    except Exception:
+        pass
     salvar_aba("Config_Professores", df, _colunas_gravacao(df, COLUNAS_PROFESSORES))
     return None
+
+
+def _sala_professor_norm(valor) -> str:
+    texto = str(valor or "").strip()
+    if texto.lower() in {"", "nan", "none", "nat", "<na>"}:
+        return ""
+    return texto
+
+
+def listar_professores_cadastro() -> pd.DataFrame:
+    """Professores ativos no cadastro (Base_Alunos) para escolha na associação aos ciclos."""
+    try:
+        base = ler_aba("Base_Alunos")
+    except Exception:
+        return pd.DataFrame(columns=["Email", "Nome", "Tipo_Cadastro"])
+    if base is None or base.empty:
+        return pd.DataFrame(columns=["Email", "Nome", "Tipo_Cadastro"])
+    out = base.copy()
+    if "Perfil" in out.columns:
+        perfil = out["Perfil"].astype(str).str.strip().str.lower()
+        out = out[perfil.str.contains("professor", na=False)]
+    col_email = "Email_Pessoal" if "Email_Pessoal" in out.columns else None
+    col_nome = "Nome_Completo" if "Nome_Completo" in out.columns else None
+    if not col_email or not col_nome:
+        return pd.DataFrame(columns=["Email", "Nome", "Tipo_Cadastro"])
+    col_tipo = None
+    for candidata in ("Tipo_Professor", "Tipo Professor", "Tipo"):
+        if candidata in out.columns:
+            col_tipo = candidata
+            break
+    linhas = []
+    vistos = set()
+    for _, row in out.iterrows():
+        email = str(row.get(col_email, "")).strip().lower()
+        nome = str(row.get(col_nome, "")).strip()
+        if not email or email in {"nan", "none"} or email in vistos:
+            continue
+        if not nome or nome.lower() in {"nan", "none"}:
+            continue
+        vistos.add(email)
+        tipo = str(row.get(col_tipo, "")).strip().title() if col_tipo else ""
+        if tipo.lower() in {"nan", "none"}:
+            tipo = ""
+        linhas.append({"Email": email, "Nome": nome, "Tipo_Cadastro": tipo})
+    if not linhas:
+        return pd.DataFrame(columns=["Email", "Nome", "Tipo_Cadastro"])
+    return pd.DataFrame(linhas).sort_values("Nome", kind="stable").reset_index(drop=True)
+
+
+def _papel_disciplina_norm(valor) -> str:
+    texto = str(valor or "").strip().title()
+    if texto in {"Ambos", "Orientador E Especialista", "Ori/Esp"}:
+        return "Ambos"
+    if texto == "Especialista":
+        return "Especialista"
+    if texto == "Orientador":
+        return "Orientador"
+    return ""
+
+
+def papel_permite_orientador(papel: str) -> bool:
+    return _papel_disciplina_norm(papel) in {"Orientador", "Ambos"}
+
+
+def papel_permite_especialista(papel: str) -> bool:
+    return _papel_disciplina_norm(papel) in {"Especialista", "Ambos"}
+
+
+def papel_padrao_do_cadastro(tipo_cadastro: str) -> str:
+    """Sugere Papel da disciplina a partir do Tipo_Professor do cadastro."""
+    tipo = str(tipo_cadastro or "").strip().title()
+    if tipo == "Especialista":
+        return "Especialista"
+    if tipo == "Ambos":
+        return "Ambos"
+    return "Orientador"
+
+
+def carregar_professores_disciplina(id_disciplina: str | None = None) -> pd.DataFrame:
+    try:
+        garantir_aba_avaliacao("Config_Professores_Disciplina")
+    except Exception:
+        pass
+    try:
+        df = ler_aba("Config_Professores_Disciplina")
+    except Exception:
+        df = pd.DataFrame()
+    df = _garantir_colunas(df, COLUNAS_PROFESSORES_DISCIPLINA)
+    df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
+    df["Professor"] = df["Professor"].astype(str).str.strip()
+    df["Email"] = df["Email"].astype(str).str.strip().str.lower()
+    df.loc[df["Email"].isin(["nan", "none"]), "Email"] = ""
+    df["Papel"] = df["Papel"].map(_papel_disciplina_norm)
+    df["Disciplina"] = df["Disciplina"].astype(str).str.strip()
+    df.loc[df["Disciplina"].str.lower().isin(["nan", "none"]), "Disciplina"] = ""
+    df = df[df["Email"].ne("") | df["Professor"].ne("")]
+    if id_disciplina:
+        id_limpo = normalizar_id(id_disciplina)
+        df = df[df["ID_Disciplina"] == id_limpo].copy()
+    return df.reset_index(drop=True)
+
+
+def _sincronizar_ciclos_com_pool(id_disciplina: str, pool: pd.DataFrame) -> str | None:
+    """Remove vínculos de ciclo incompatíveis com o pool da disciplina."""
+    id_disc = normalizar_id(id_disciplina)
+    base = carregar_professores()
+    if base.empty:
+        return None
+    resto_outras = base[base["ID_Disciplina"].map(normalizar_id) != id_disc].copy()
+    bloco = base[base["ID_Disciplina"].map(normalizar_id) == id_disc].copy()
+    if bloco.empty:
+        return None
+
+    permitidos: dict[str, str] = {}
+    for _, row in pool.iterrows():
+        email = str(row.get("Email", "")).strip().lower()
+        nome = str(row.get("Professor", "")).strip().lower()
+        papel = _papel_disciplina_norm(row.get("Papel", ""))
+        if email:
+            permitidos[email] = papel
+        if nome:
+            permitidos[f"nome:{nome}"] = papel
+
+    manter = []
+    for _, row in bloco.iterrows():
+        email = str(row.get("Email", "")).strip().lower()
+        nome = str(row.get("Professor", "")).strip().lower()
+        papel = permitidos.get(email) or permitidos.get(f"nome:{nome}")
+        if not papel:
+            continue
+        tipo = str(row.get("Tipo", "")).strip().title()
+        if tipo == "Orientador" and not papel_permite_orientador(papel):
+            continue
+        if tipo == "Especialista" and not papel_permite_especialista(papel):
+            continue
+        if tipo == "Orientador" and not _sala_professor_norm(row.get("Sala", "")):
+            continue
+        manter.append(row)
+
+    novos = pd.DataFrame(manter) if manter else bloco.iloc[0:0].copy()
+    return salvar_professores(pd.concat([resto_outras, novos], ignore_index=True))
+
+
+def salvar_professores_disciplina(df: pd.DataFrame) -> str | None:
+    df = _garantir_colunas(df, COLUNAS_PROFESSORES_DISCIPLINA)
+    df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
+    df["Professor"] = df["Professor"].astype(str).str.strip()
+    df["Email"] = df["Email"].astype(str).str.strip().str.lower()
+    df.loc[df["Email"].isin(["nan", "none"]), "Email"] = ""
+    df["Papel"] = df["Papel"].map(_papel_disciplina_norm)
+    df["Disciplina"] = df["Disciplina"].astype(str).str.strip()
+    df = df[df["Email"].ne("") | df["Professor"].ne("")]
+    if not df.empty:
+        if df["ID_Disciplina"].eq("").any():
+            return "Cada professor da disciplina precisa do ID da disciplina."
+        if df["Professor"].eq("").any():
+            return "Cada linha precisa do nome do professor."
+        if df["Email"].eq("").any():
+            return "Cada professor da disciplina precisa de e-mail."
+        if df["Papel"].eq("").any() or (~df["Papel"].isin(PAPEIS_DISCIPLINA)).any():
+            return "Papel deve ser Orientador, Especialista ou Ambos."
+        if df.duplicated(subset=["ID_Disciplina", "Email"]).any():
+            return "Há professor repetido na mesma disciplina."
+    try:
+        garantir_aba_avaliacao("Config_Professores_Disciplina")
+        garantir_colunas_avaliacao("Config_Professores_Disciplina", COLUNAS_PROFESSORES_DISCIPLINA)
+    except Exception:
+        pass
+    salvar_aba(
+        "Config_Professores_Disciplina",
+        df,
+        _colunas_gravacao(df, COLUNAS_PROFESSORES_DISCIPLINA) if not df.empty else COLUNAS_PROFESSORES_DISCIPLINA,
+    )
+    return None
+
+
+def substituir_professores_disciplina(
+    id_disciplina: str,
+    nome_disciplina: str,
+    linhas: list[dict],
+) -> str | None:
+    """Substitui o pool de professores de uma disciplina e alinha os ciclos."""
+    id_disc = normalizar_id(id_disciplina)
+    if not id_disc:
+        return "Disciplina inválida."
+    base = carregar_professores_disciplina()
+    resto = base[base["ID_Disciplina"].map(normalizar_id) != id_disc].copy()
+    if linhas:
+        novos = pd.DataFrame(linhas)
+        for col in COLUNAS_PROFESSORES_DISCIPLINA:
+            if col not in novos.columns:
+                novos[col] = ""
+        novos["ID_Disciplina"] = id_disc
+        novos["Disciplina"] = str(nome_disciplina or "").strip()
+        pool = novos
+        completo = pd.concat([resto, novos], ignore_index=True)
+    else:
+        pool = resto.iloc[0:0].copy()
+        completo = resto
+    erro = salvar_professores_disciplina(completo)
+    if erro:
+        return erro
+    return _sincronizar_ciclos_com_pool(id_disc, pool)
+
+
+def salas_da_disciplina(id_disciplina: str) -> list[str]:
+    """Salas presentes na entrância da disciplina."""
+    id_limpo = normalizar_id(id_disciplina)
+    if not id_limpo:
+        return []
+    try:
+        df = ler_aba("Entrancia_Turma")
+    except Exception:
+        return []
+    if df.empty or "Sala" not in df.columns:
+        return []
+    bloco = df[df["ID_Disciplina"].map(normalizar_id) == id_limpo]
+    return sorted(
+        {str(s).strip() for s in bloco["Sala"].tolist() if str(s).strip()},
+        key=lambda x: (len(x), x),
+    )
+
+
+def substituir_professores_ciclo(
+    id_disciplina: str,
+    id_ciclo: str,
+    linhas: list[dict],
+) -> str | None:
+    """Substitui todas as associações de um ciclo pelos vínculos informados."""
+    id_disc = normalizar_id(id_disciplina)
+    id_cic = normalizar_id(id_ciclo)
+    if not id_disc or not id_cic:
+        return "Disciplina ou ciclo inválido."
+    for linha in linhas:
+        tipo = str(linha.get("Tipo", "")).strip().title()
+        if tipo != "Orientador":
+            continue
+        sala = _sala_professor_norm(linha.get("Sala", ""))
+        if not sala:
+            nome = str(linha.get("Professor", "")).strip() or str(linha.get("Email", "")).strip()
+            return (
+                f"Orientador precisa da sala: {nome}. "
+                "A sala filtra a avaliação do curso para o aluno."
+            )
+        linha["Sala"] = sala
+    base = carregar_professores()
+    resto = base[
+        ~(
+            (base["ID_Disciplina"].map(normalizar_id) == id_disc)
+            & (base["ID_Ciclo"].map(normalizar_id) == id_cic)
+        )
+    ].copy()
+    if not linhas:
+        return salvar_professores(resto)
+    novos = pd.DataFrame(linhas)
+    for col in COLUNAS_PROFESSORES:
+        if col not in novos.columns:
+            novos[col] = ""
+    novos["ID_Disciplina"] = id_disc
+    novos["ID_Ciclo"] = id_cic
+    return salvar_professores(pd.concat([resto, novos], ignore_index=True))
 
 
 def salas_do_orientador(usuario: dict, id_disciplina: str | None = None) -> list[str]:
     """Salas cadastradas para a professora orientadora nesta disciplina."""
     nome = str((usuario or {}).get("nome") or "").strip().lower()
-    if not nome:
+    email = str((usuario or {}).get("email") or "").strip().lower()
+    if not nome and not email:
         return []
     df = carregar_professores()
     if df.empty:
         return []
-    filtro = df[
-        (df["Tipo"].astype(str).str.strip().str.title() == "Orientador")
-        & (df["Professor"].astype(str).str.strip().str.lower() == nome)
-    ]
+    filtro = df[df["Tipo"].astype(str).str.strip().str.title() == "Orientador"].copy()
+    if email and "Email" in filtro.columns:
+        por_email = filtro[filtro["Email"].astype(str).str.strip().str.lower() == email]
+        if not por_email.empty:
+            filtro = por_email
+        else:
+            filtro = filtro[filtro["Professor"].astype(str).str.strip().str.lower() == nome]
+    else:
+        filtro = filtro[filtro["Professor"].astype(str).str.strip().str.lower() == nome]
     if id_disciplina:
         id_limpo = normalizar_id(id_disciplina)
         com_disc = filtro[filtro["ID_Disciplina"].map(normalizar_id) == id_limpo]

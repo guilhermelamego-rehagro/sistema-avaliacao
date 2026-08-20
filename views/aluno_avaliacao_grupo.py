@@ -5,7 +5,11 @@ from __future__ import annotations
 import streamlit as st
 
 from data.sheets import ler_aba
-from domain.avaliacoes import formatar_nota_entrega, listar_comentarios_banca_grupo
+from domain.avaliacoes import (
+    formatar_nota_entrega,
+    listar_comentarios_banca_grupo,
+    obter_media_avaliacao_grupo,
+)
 from domain.ciclos import ciclo_inativo, obter_disciplina_ativa, ordenar_ciclos
 from utils.logs import registrar_log_acesso
 
@@ -24,16 +28,16 @@ def _mapa_ciclos(id_disciplina: str) -> dict[str, tuple[int, str]]:
     return mapa
 
 
-def _mostrar_media(itens: list[dict], id_ciclo: str) -> bool:
-    """Média só com 2+ avaliações da banca ou depois que o ciclo encerrou."""
-    return len(itens) >= 2 or ciclo_inativo(id_ciclo)
+def _mostrar_media_banca(itens_banca: list[dict], id_ciclo: str) -> bool:
+    """Média da banca só com 2+ avaliações de professores ou ciclo encerrado."""
+    return len(itens_banca) >= 2 or ciclo_inativo(id_ciclo)
 
 
 def render(usuario: dict):
     st.header("Avaliação do grupo")
     st.caption(
-        "Comentários da banca. A nota média do grupo aparece com duas ou mais "
-        "avaliações, ou após o ciclo encerrar."
+        "Comentários da banca. A nota do grupo é a média dos professores, "
+        "salvo quando a coordenação registra uma nota de conferência (que substitui a média)."
     )
     registrar_log_acesso(usuario["email"], usuario["nome"], "Visualizou Avaliação do Grupo")
 
@@ -72,24 +76,43 @@ def render(usuario: dict):
 
     for id_ciclo in ciclos_ordenados:
         itens = sorted(por_ciclo[id_ciclo], key=lambda x: x["nome_avaliador"].lower())
+        itens_banca = [i for i in itens if not i.get("eh_conferencia")]
         nome_ciclo = ordem.get(id_ciclo, (0, itens[0]["nome_ciclo"] or f"Ciclo {id_ciclo}"))[1]
+        oficial = obter_media_avaliacao_grupo(id_ciclo, grupo, sala, str(id_disc))
 
-        if _mostrar_media(itens, id_ciclo):
-            media = sum(i["nota_total"] for i in itens) / len(itens)
-            titulo = f"{nome_ciclo} — média da banca {formatar_nota_entrega(media)}"
+        if oficial and oficial.get("origem") == "conferencia":
+            titulo = (
+                f"{nome_ciclo} — nota da coordenação "
+                f"{formatar_nota_entrega(oficial['nota_total'])}"
+            )
+        elif oficial and _mostrar_media_banca(itens_banca, id_ciclo):
+            titulo = (
+                f"{nome_ciclo} — média da banca "
+                f"{formatar_nota_entrega(oficial['nota_total'])}"
+            )
         else:
             titulo = nome_ciclo
 
         with st.expander(titulo, expanded=True):
-            if not _mostrar_media(itens, id_ciclo):
+            if oficial and oficial.get("origem") == "conferencia":
+                st.caption(
+                    "A coordenação registrou uma nota de conferência que substitui a média da banca."
+                )
+            elif not _mostrar_media_banca(itens_banca, id_ciclo):
                 st.caption(
                     "A média da banca será exibida quando houver pelo menos duas "
-                    "avaliações ou após o encerramento do ciclo."
+                    "avaliações de professores ou após o encerramento do ciclo."
                 )
             for item in itens:
                 with st.container(border=True):
-                    st.markdown(f"**{item['nome_avaliador'] or 'Avaliador'}**")
-                    if item["comentario"]:
+                    rotulo = item["nome_avaliador"]
+                    if item.get("eh_conferencia"):
+                        rotulo = f"{rotulo} (conferência)"
+                    st.markdown(f"**{rotulo}**")
+                    st.write(
+                        f"Apresentação {formatar_nota_entrega(item['nota_apresentacao'])} · "
+                        f"Conteúdo {formatar_nota_entrega(item['nota_conteudo'])} · "
+                        f"Total {formatar_nota_entrega(item['nota_total'])}"
+                    )
+                    if item.get("comentario"):
                         st.write(item["comentario"])
-                    else:
-                        st.caption("Sem comentário escrito neste lançamento.")

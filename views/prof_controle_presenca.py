@@ -52,7 +52,7 @@ def render(usuario: dict, tipo: str = "aulas"):
         "Selecione a Disciplina para análise:",
         lista_opcoes,
         index=idx_ativo,
-        key=f"presenca_disc_{tipo}",
+        key="presenca_disc",
     )
     id_disciplina_sel = disc_sel.split(" - ")[0]
 
@@ -106,17 +106,28 @@ def render(usuario: dict, tipo: str = "aulas"):
 
     turmas_opcoes = _ordenacao_natural(df_final["Turma"].unique())
     salas_opcoes = _ordenacao_natural(df_final["Sala"].unique())
-    grupos_opcoes = _ordenacao_natural(df_final["Grupo"].unique())
 
     st.markdown("---")
     c1, c2, c3 = st.columns(3)
-    turma_filtro = c1.multiselect("Filtrar por Turma:", turmas_opcoes, key=f"presenca_turma_{tipo}")
+    turma_filtro = c1.multiselect("Filtrar por Turma:", turmas_opcoes, key="presenca_turma")
     with c2:
-        sala_filtro = multiselect_sala(salas_opcoes, key=f"presenca_sala_{tipo}", usuario=usuario)
-    grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes, key=f"presenca_grupo_{tipo}")
+        sala_filtro = multiselect_sala(salas_opcoes, key="presenca_sala", usuario=usuario)
+
+    base_grupos = df_final
+    if turma_filtro:
+        base_grupos = base_grupos[base_grupos["Turma"].isin(turma_filtro)]
+    if sala_filtro:
+        base_grupos = base_grupos[base_grupos["Sala"].isin(sala_filtro)]
+    grupos_opcoes = _ordenacao_natural(base_grupos["Grupo"].unique())
+    if "presenca_grupo" in st.session_state:
+        atual_grupos = st.session_state.get("presenca_grupo") or []
+        if not isinstance(atual_grupos, list):
+            atual_grupos = [atual_grupos] if atual_grupos else []
+        st.session_state["presenca_grupo"] = [g for g in atual_grupos if g in grupos_opcoes]
+    grupo_filtro = c3.multiselect("Filtrar por Grupo:", grupos_opcoes, key="presenca_grupo")
 
     c4, c5, c6 = st.columns([2, 2, 1.4])
-    nome_busca = c4.text_input("Buscar por Nome do Aluno:", key=f"presenca_nome_{tipo}")
+    nome_busca = c4.text_input("Buscar por Nome do Aluno:", key="presenca_nome")
     faixa_projetada = c5.slider(
         "Filtrar por % Projetada:",
         min_value=0.0,

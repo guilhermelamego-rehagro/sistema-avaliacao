@@ -64,6 +64,7 @@ from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grup
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
 from views import home_aluno, prof_anotacoes_daily, prof_cadastros, prof_calendario, prof_controle_presenca, prof_liberacao_notas, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
+from utils.ordenacao import ordenar_grupos_lista
 
 # 1. Configurações Iniciais da Página
 st.set_page_config(page_title="Portal de Avaliações - Rehagro", page_icon="🎓", layout="wide")
@@ -530,22 +531,28 @@ else:
         # ---------------------------------------------------------
         entrancia_disc = df_entrancia[df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
         salas_pares = sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
-        sala_sel = selectbox_sala(
-            "Selecione a Sala:",
-            salas_pares,
-            key="geral_sala_sel",
-            usuario=aluno,
+        f1, f2 = st.columns(2)
+        with f1:
+            sala_sel = selectbox_sala(
+                "Sala:",
+                salas_pares,
+                key="geral_sala_sel",
+                usuario=aluno,
+            )
+        if sala_sel != "Todas":
+            base_grupos = entrancia_disc[entrancia_disc['Sala'].astype(str) == sala_sel]
+        else:
+            base_grupos = entrancia_disc
+        lista_grupos_geral = ordenar_grupos_lista(
+            base_grupos['Grupo'].dropna().astype(str).unique().tolist()
         )
-        
-        def chave_ordenacao_geral(x):
-            try:
-                return (0, float(x)) 
-            except ValueError:
-                return (1, str(x))   
-
-        lista_grupos_geral = sorted(entrancia_disc['Grupo'].dropna().unique().astype(str).tolist(), key=chave_ordenacao_geral)
-        grupo_sel = st.selectbox("Selecione o Grupo/Turma:", ["Todos"] + lista_grupos_geral)
-        nome_busca = st.text_input("Buscar Aluno por Nome:")
+        with f2:
+            grupo_sel = st.selectbox(
+                "Grupo:",
+                ["Todos"] + lista_grupos_geral,
+                key=f"geral_grupo_sel_{sala_sel}",
+            )
+        nome_busca = st.text_input("Buscar aluno por nome:", key="geral_nome_busca")
         
         df_alunos_esperados = entrancia_disc.copy()
         if sala_sel != "Todas":

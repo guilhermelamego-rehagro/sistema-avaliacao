@@ -42,8 +42,12 @@ def filtrar_ciclos_ativos(df_ciclos: pd.DataFrame, hoje: pd.Timestamp | None = N
     hoje = hoje or hoje_normalizado()
     df = preparar_ciclos(df_ciclos)
     ativo_status = df["Status"].astype(str).str.lower().str.strip() == "ativo"
+    tem_janela = df["Data início"].notna() & df["Data fim"].notna()
     ativo_data = (hoje >= df["Data início"]) & (hoje <= df["Data fim"])
-    return df[ativo_status | ativo_data]
+    # Com abertura e encerramento das pares preenchidos, só abre dentro da janela.
+    # Sem janela completa, mantém o fallback pelo Status ativo.
+    aberto = (tem_janela & ativo_status & ativo_data) | (~tem_janela & ativo_status)
+    return df[aberto]
 
 
 def ciclos_da_disciplina(df_ciclos: pd.DataFrame, id_disciplina: str) -> pd.DataFrame:
@@ -135,10 +139,10 @@ def ciclo_inativo(id_ciclo: str) -> bool:
     prep = preparar_ciclos(filtro)
     inicio = prep.iloc[0]["Data início"]
     fim = prep.iloc[0]["Data fim"]
-    if pd.isna(inicio) or pd.isna(fim):
-        return not ativo_status
-    ativo_data = (hoje >= inicio) & (hoje <= fim)
-    return not (ativo_status or ativo_data)
+    if pd.notna(inicio) and pd.notna(fim):
+        ativo_data = (hoje >= inicio) & (hoje <= fim)
+        return not (ativo_status and ativo_data)
+    return not ativo_status
 
 
 def _como_date(valor) -> date | None:

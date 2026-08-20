@@ -163,13 +163,12 @@ def _secoes_aluno() -> list[SecaoMenu]:
 def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[SecaoMenu]:
     from auth.supabase_auth import professor_e_orientador
 
-    itens_avaliacoes: list[ItemMenu] = [
-        ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"),
-    ]
-    if professor_e_orientador(usuario) or modo_coordenador:
-        itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+    itens_avaliacoes: list[ItemMenu] = []
     if professor_e_orientador(usuario):
         itens_avaliacoes.append(ItemMenu(ROTA_ORDEM_APRESENTACAO, "Ordem de apresentação"))
+    itens_avaliacoes.append(ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"))
+    if professor_e_orientador(usuario) or modo_coordenador:
+        itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
     itens_avaliacoes.extend(
         [
             ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),

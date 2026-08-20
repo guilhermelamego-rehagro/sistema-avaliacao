@@ -301,10 +301,8 @@ def _classe_dia(tipos: list[str]) -> str:
         return "cal-varios"
     if len(academicos) == 1:
         return _CORES.get(academicos[0], "cal-aula")
-    if any(_eh_feriado(t) for t in tipos):
+    if any(_eh_feriado(t) or _eh_recesso(t) for t in tipos):
         return "cal-feriado"
-    if any(_eh_recesso(t) for t in tipos):
-        return "cal-recesso"
     return ""
 
 
@@ -408,14 +406,13 @@ def _css_calendario() -> str:
 .cal-daily { background: #E67E22; color: #fff; font-weight: 600; }
 .cal-encontro { background: #1565C0; color: #fff; font-weight: 600; }
 .cal-feriado { background: #C62828; color: #fff; font-weight: 600; }
-.cal-recesso { background: #AD1457; color: #fff; font-weight: 600; }
 .cal-varios { background: #7E57C2; color: #fff; font-weight: 600; }
-.cal-hoje:not(.cal-aula):not(.cal-apresentacao):not(.cal-daily):not(.cal-encontro):not(.cal-feriado):not(.cal-recesso):not(.cal-varios) {
+.cal-hoje:not(.cal-aula):not(.cal-apresentacao):not(.cal-daily):not(.cal-encontro):not(.cal-feriado):not(.cal-varios) {
   box-shadow: inset 0 0 0 1.5px #004D28;
   font-weight: 700;
 }
 .cal-hoje.cal-aula, .cal-hoje.cal-apresentacao, .cal-hoje.cal-daily, .cal-hoje.cal-encontro,
-.cal-hoje.cal-feriado, .cal-hoje.cal-recesso, .cal-hoje.cal-varios {
+.cal-hoje.cal-feriado, .cal-hoje.cal-varios {
   box-shadow: 0 0 0 1px #fff, 0 0 0 2px #004D28;
 }
 .cal-day[data-tip]:hover::after {
@@ -453,8 +450,7 @@ def _render_calendario_visual(
         "<span><i style='background:#00796B'></i>Apresentação de projeto</span>"
         "<span><i style='background:#E67E22'></i>Daily (orientação)</span>"
         "<span><i style='background:#1565C0'></i>Encontro presencial</span>"
-        "<span><i style='background:#C62828'></i>Feriado (nacional ou BH)</span>"
-        "<span><i style='background:#AD1457'></i>Recesso escolar</span>"
+        "<span><i style='background:#C62828'></i>Feriado/recesso</span>"
         "<span><i style='background:#7E57C2'></i>Mais de um evento no dia</span>"
         "</div>",
         unsafe_allow_html=True,
@@ -824,7 +820,8 @@ def render(
         id_disc = normalizar_id(id_disciplina)
         match = df_disc[df_disc["ID_Disciplina"].astype(str).str.strip() == str(id_disc).strip()]
         nome = str(match.iloc[0]["Nome_Disciplina"]) if not match.empty else id_disc
-        st.markdown(f"**Disciplina:** {id_disc} — {nome}")
+        if not visao_aluno:
+            st.markdown(f"**Disciplina:** {id_disc} — {nome}")
     else:
         lista = df_disc["Nome_Disciplina"].astype(str).tolist()
         nome = st.selectbox(

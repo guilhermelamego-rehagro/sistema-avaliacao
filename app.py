@@ -299,16 +299,22 @@ else:
         df_respostas = ler_aba("Respostas_Curso") 
         df_prof = ler_aba("Config_Professores") 
         
-        ciclo_ativo = escolher_ciclo_aberto(df_ciclos)
+        disc_ativa = df_disc[df_disc['Status'].astype(str).str.lower().str.strip() == 'ativo']
+        if disc_ativa.empty:
+            st.warning("Não há nenhuma disciplina ativa no momento.")
+            st.stop()
+
+        id_disc = str(disc_ativa.iloc[0]['ID_Disciplina']).strip()
+        nome_disc = str(disc_ativa.iloc[0]['Nome_Disciplina']).strip()
+        ciclos_disc = df_ciclos[df_ciclos['ID_Disciplina'].astype(str).str.strip() == id_disc]
+        ciclo_ativo = escolher_ciclo_aberto(ciclos_disc, id_disc)
         
         if ciclo_ativo is None:
-            st.warning("Não há nenhuma avaliação de curso aberta para hoje.")
+            st.warning("Nenhuma avaliação do curso aberta no momento.")
             st.stop()
             
         id_ciclo = str(ciclo_ativo['ID_Ciclo']).strip()
         nome_ciclo = str(ciclo_ativo['Nome_Ciclo']).strip()
-        id_disc = str(ciclo_ativo['ID_Disciplina']).strip()
-        nome_disc = str(df_disc[df_disc['ID_Disciplina'].astype(str).str.strip() == id_disc].iloc[0]['Nome_Disciplina'])
         
         if not df_respostas.empty:
             ja_avaliou = not df_respostas[(df_respostas['ID do Ciclo'].astype(str).str.strip() == id_ciclo) & 

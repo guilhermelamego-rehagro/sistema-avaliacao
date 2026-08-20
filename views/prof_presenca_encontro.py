@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba
-from domain.cadastros import carregar_disciplinas
+from domain.ciclos import obter_disciplina_ativa
 from domain.encontro_presencial import (
     STATUS_PRESENCA,
     carregar_presenca_encontro,
@@ -27,21 +27,20 @@ def render(usuario: dict):
         "O lançamento vale na frequência das aulas (ajuste manual) e fica registrado neste encontro."
     )
 
-    df_disc = carregar_disciplinas()
-    presenciais = df_disc[df_disc["Encontro_Presencial"].astype(str).str.strip() == "Sim"]
-    if presenciais.empty:
-        st.info("Nenhuma disciplina está marcada com encontro presencial no cadastro.")
+    id_ativa, nome_ativa = obter_disciplina_ativa()
+    if not id_ativa:
+        st.info("Nenhuma disciplina ativa no momento.")
         return
 
-    opcoes = [
-        f"{row['ID_Disciplina']} — {row['Nome_Disciplina']}"
-        for _, row in presenciais.iterrows()
-    ]
-    disc_sel = st.selectbox("Disciplina:", opcoes, key="enc_pres_disc")
-    id_disc = disc_sel.split(" — ")[0].strip()
-    if not disciplina_tem_encontro_presencial(id_disc):
-        st.warning("Esta disciplina não tem encontro presencial.")
+    id_ativa = normalizar_id(id_ativa)
+    if not disciplina_tem_encontro_presencial(id_ativa):
+        st.info(
+            f"A disciplina atual (**{nome_ativa or id_ativa}**) não tem encontro presencial."
+        )
         return
+
+    id_disc = id_ativa
+    st.markdown(f"**Disciplina:** {id_disc} — {nome_ativa}")
 
     datas = datas_encontro_ativas(id_disc)
     if datas.empty:

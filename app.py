@@ -47,6 +47,7 @@ from navigation import (
     ROTA_INICIO,
     ROTA_LANCAR_BANCA,
     ROTA_ANOTACOES_DAILY,
+    ROTA_ORDEM_APRESENTACAO,
     ROTA_LIBERAR_NOTAS,
     ROTA_MINHAS_NOTAS,
     ROTA_AVALIACAO_GRUPO_ALUNO,
@@ -61,7 +62,7 @@ from navigation import (
 )
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_anotacoes_daily, prof_cadastros, prof_calendario, prof_controle_presenca, prof_liberacao_notas, prof_planejamento, prof_presenca_encontro
+from views import home_aluno, prof_anotacoes_daily, prof_cadastros, prof_calendario, prof_controle_presenca, prof_liberacao_notas, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 
 # 1. Configurações Iniciais da Página
@@ -1039,10 +1040,13 @@ else:
         prof_config_componentes.render(aluno)
 
     # =========================================================
-    # MÓDULO COORDENADOR: CONFIGURAÇÕES
+    # MÓDULO COORDENADOR: JANELA DE AVALIAÇÃO DA BANCA
     # =========================================================
     elif menu == ROTA_COORD_CONFIG and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_coordenador.render(aluno)
+
+    elif menu == ROTA_ORDEM_APRESENTACAO and perfil == "Professor" and professor_e_orientador(aluno):
+        prof_ordem_apresentacao.render(aluno)
 
     elif menu == ROTA_COORD_DISCIPLINAS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_cadastros.render_disciplinas(aluno)

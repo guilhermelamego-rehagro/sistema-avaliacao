@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from config import PESO_ORIENTADOR, PESO_PARES, TIPOS_COMPONENTE_LABEL
+from config import PESO_ORIENTADOR, PESO_PARES
 from data.sheets import ler_aba
 from domain.avaliacoes import formatar_nota_entrega, obter_avaliacao_grupo, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
@@ -148,7 +148,6 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
         peso = float(comp["Peso"])
         id_ciclo_cfg = str(comp.get("ID_Ciclo", "")).strip()
         id_ciclo, origem_ciclo = resolver_id_ciclo_componente(tipo, id_ciclo_cfg, id_disciplina)
-        tipo_label = TIPOS_COMPONENTE_LABEL.get(tipo, tipo)
 
         nota: float | None = None
         detalhe = ""
@@ -175,7 +174,6 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
         linhas.append(
             {
                 "Componente": nome,
-                "Tipo": tipo_label,
                 "Peso (%)": peso,
                 "Nota (0-100)": nota,
                 "Contribuição": contribuicao,

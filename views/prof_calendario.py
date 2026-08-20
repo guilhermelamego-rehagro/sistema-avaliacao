@@ -455,28 +455,23 @@ def _render_calendario_visual(
         "</div>",
         unsafe_allow_html=True,
     )
-    if not visao_aluno:
-        st.markdown(
-            "<div class='cal-dica'>💡 Dica: especialista e apresentação de projeto entram na frequência. "
-            "Feriados vêm da lista nacional e de Belo Horizonte; o recesso escolar é o indicado pelo sindicato.</div>",
-            unsafe_allow_html=True,
-        )
 
     nav_e, _, nav_d = st.columns([1, 3, 1])
     if nav_e.button("← Meses anteriores", key=f"cal_prev_{id_disc}", width="stretch"):
-        st.session_state[chave_off] = int(st.session_state[chave_off]) - 2
+        st.session_state[chave_off] = int(st.session_state[chave_off]) - 3
         st.rerun()
     if nav_d.button("Próximos meses →", key=f"cal_next_{id_disc}", width="stretch"):
-        st.session_state[chave_off] = int(st.session_state[chave_off]) + 2
+        st.session_state[chave_off] = int(st.session_state[chave_off]) + 3
         st.rerun()
 
     ano, mes = _avancar_mes(hoje.year, hoje.month, int(st.session_state[chave_off]))
-    ano2, mes2 = _avancar_mes(ano, mes, 1)
+    meses_visiveis = [_avancar_mes(ano, mes, i) for i in range(3)]
     html = (
         _css_calendario()
         + "<div class='cal-wrap'><div class='cal-meses'>"
-        + _html_mes(ano, mes, eventos, hoje, detalhes)
-        + _html_mes(ano2, mes2, eventos, hoje, detalhes)
+        + "".join(
+            _html_mes(a, m, eventos, hoje, detalhes) for a, m in meses_visiveis
+        )
         + "</div></div>"
     )
     if hasattr(st, "html"):
@@ -490,10 +485,11 @@ def _render_calendario_visual(
     if not academicos:
         st.info("Ainda não há aulas, dailies nem encontro presencial lançados para esta disciplina.")
 
+    conjunto_meses = set(meses_visiveis)
     visiveis = [
         (d, t)
         for d, t in eventos.items()
-        if (d.year, d.month) in {(ano, mes), (ano2, mes2)}
+        if (d.year, d.month) in conjunto_meses
     ]
     if not visiveis:
         return
@@ -801,15 +797,6 @@ def render(
 
     if mostrar_cabecalho:
         st.header("Calendário")
-        if pode_editar:
-            st.caption(
-                "Lance as datas que entram na frequência e na nota de dailies. "
-                "Em cada dia de aula dá para registrar um detalhe, como Ciclo 1 ou o tema da aula."
-            )
-        else:
-            st.caption(
-                "Aulas (frequência), dailies e encontro presencial da disciplina."
-            )
 
     df_disc = carregar_disciplinas()
     if df_disc is None or df_disc.empty:
@@ -853,3 +840,10 @@ def render(
             _render_editor_tipo("dailies", id_disc, usuario)
         with aba_fer:
             _render_institucional(usuario)
+
+    if not visao_aluno:
+        st.markdown(
+            "<div class='cal-dica'>💡 Dica: especialista e apresentação de projeto entram na frequência. "
+            "Feriados vêm da lista nacional e de Belo Horizonte; o recesso escolar é o indicado pelo sindicato.</div>",
+            unsafe_allow_html=True,
+        )

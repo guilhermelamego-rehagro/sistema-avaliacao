@@ -111,13 +111,13 @@ def render(usuario: dict):
         st.subheader("Coordenação")
         st.caption("Modo coordenador ativo.")
         _atalho(
-            "Conferir entregas",
+            "Conferir notas grupos",
             "Matriz grupos × ciclos para lançamentos em lote.",
             ROTA_COORD_CONFERIR,
             "home_coord_conf",
         )
     elif usuario_e_coordenador(usuario):
-        st.caption("Ative **Modo coordenador** na barra lateral para configurações e conferência de entregas.")
+        st.caption("Ative **Modo coordenador** na barra lateral para configurações e conferência de notas.")
 
     if professor_e_orientador(usuario):
         st.markdown("---")

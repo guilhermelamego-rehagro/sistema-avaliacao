@@ -29,6 +29,7 @@ ROTA_MODERACAO = "moderacao"
 ROTA_ORIENTADOR = "orientador"
 ROTA_LANCAR_BANCA = "lancar_banca"
 ROTA_ANOTACOES_DAILY = "anotacoes_daily"
+ROTA_ORDEM_APRESENTACAO = "ordem_apresentacao"
 ROTA_FREQ_CONTROLE = "freq_controle"
 ROTA_FREQ_PROGRAMACAO = "freq_programacao"
 ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
@@ -60,6 +61,8 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
         ROTA_ANOTACOES_DAILY,
+        ROTA_ORDEM_APRESENTACAO,
+        ROTA_COORD_CONFIG,
     }
 )
 
@@ -80,7 +83,12 @@ LEGACY_ROUTES: dict[str, str] = {
     "Controle de dailies": ROTA_FREQ_DAILIES_PROF,
     "Cadastro de Avaliações": ROTA_COORD_COMPONENTES,
     "Configurações do Coordenador": ROTA_COORD_CONFIG,
+    "Janela de entregas": ROTA_COORD_CONFIG,
+    "Janela de avaliação da banca": ROTA_COORD_CONFIG,
+    "Ordem de apresentação": ROTA_ORDEM_APRESENTACAO,
     "Conferência de Entregas": ROTA_COORD_CONFERIR,
+    "Conferir entregas": ROTA_COORD_CONFERIR,
+    "Conferir notas grupos": ROTA_COORD_CONFERIR,
     "Avaliação do Orientador": ROTA_ORIENTADOR,
     "Avaliação de Entregas": ROTA_LANCAR_BANCA,
     "Importar Canvas": ROTA_IMPORT_CANVAS,
@@ -160,6 +168,8 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     ]
     if professor_e_orientador(usuario) or modo_coordenador:
         itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+    if professor_e_orientador(usuario):
+        itens_avaliacoes.append(ItemMenu(ROTA_ORDEM_APRESENTACAO, "Ordem de apresentação"))
     itens_avaliacoes.extend(
         [
             ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
@@ -188,13 +198,13 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     ]
     if modo_coordenador:
         itens_coord: list[ItemMenu] = [
-            ItemMenu(ROTA_COORD_CONFIG, "Configurações do coordenador"),
+            ItemMenu(ROTA_COORD_CONFIG, "Janela de avaliação da banca"),
             ItemMenu(ROTA_COORD_PLANEJAMENTO, "Planejamento acadêmico"),
             ItemMenu(ROTA_COORD_DISCIPLINAS, "Cadastro de disciplinas"),
             ItemMenu(ROTA_COORD_CICLOS, "Cadastro de ciclos"),
             ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
             ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
-            ItemMenu(ROTA_COORD_CONFERIR, "Conferir entregas"),
+            ItemMenu(ROTA_COORD_CONFERIR, "Conferir notas grupos"),
         ]
         if not professor_e_orientador(usuario):
             itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))

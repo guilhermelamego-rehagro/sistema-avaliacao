@@ -159,8 +159,16 @@ def render(usuario: dict):
             key="orientador_sala",
             usuario=usuario,
         )
-    grupos = ordenar_grupos_lista(alunos["Grupo"].dropna().astype(str).unique().tolist())
-    filtro_grupo = c3.selectbox("Grupo:", ["Todos"] + grupos)
+    if filtro_sala != "Todas":
+        base_grupos = alunos[alunos["Sala"].astype(str) == filtro_sala]
+    else:
+        base_grupos = alunos
+    grupos = ordenar_grupos_lista(base_grupos["Grupo"].dropna().astype(str).unique().tolist())
+    filtro_grupo = c3.selectbox(
+        "Grupo:",
+        ["Todos"] + grupos,
+        key=f"orientador_grupo_{filtro_sala}",
+    )
 
     alunos_filtrados = alunos.copy()
     if filtro_nome:

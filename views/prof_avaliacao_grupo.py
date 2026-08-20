@@ -4,7 +4,13 @@ import streamlit as st
 
 from data.sheets import ler_aba
 from domain.avaliacoes import formatar_nota_entrega, obter_avaliacao_grupo, parse_nota_entrega, salvar_avaliacao_grupo
-from domain.ciclos import indice_ciclo_padrao, ordenar_ciclos
+from domain.ciclos import (
+    ciclo_academico_na_data,
+    indice_ciclo_academico_padrao,
+    ordenar_ciclos,
+    periodo_academico_texto,
+    preparar_ciclos,
+)
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from domain.entregas import (
     avaliacao_entregas_aberta,
@@ -56,18 +62,34 @@ def render(usuario: dict):
         return
 
     nomes_ciclos = ciclos["Nome_Ciclo"].astype(str).tolist()
+    ciclos_prep = preparar_ciclos(ciclos)
+    ciclo_vigente = ciclo_academico_na_data(ciclos_prep)
     ciclo_sel = st.selectbox(
         "Ciclo:",
         nomes_ciclos,
-        index=indice_ciclo_padrao(ciclos, nomes_ciclos),
+        index=indice_ciclo_academico_padrao(ciclos_prep, nomes_ciclos),
     )
-    row_ciclo = ciclos[ciclos["Nome_Ciclo"].astype(str) == ciclo_sel].iloc[0]
+    row_ciclo = ciclos_prep[ciclos_prep["Nome_Ciclo"].astype(str) == ciclo_sel].iloc[0]
     id_ciclo = str(row_ciclo["ID_Ciclo"]).strip()
+
+    if ciclo_vigente is not None:
+        nome_vigente = str(ciclo_vigente["Nome_Ciclo"]).strip()
+        if nome_vigente != ciclo_sel:
+            _, fim_vigente = periodo_academico_texto(ciclo_vigente)
+            ini_sel, fim_sel = periodo_academico_texto(row_ciclo)
+            trecho_fim = f" se encerra em **{fim_vigente}**" if fim_vigente else ""
+            trecho_sel = (
+                f" (**{ini_sel}** a **{fim_sel}**)" if ini_sel and fim_sel else ""
+            )
+            st.warning(
+                f"O ciclo atual (**{nome_vigente}**){trecho_fim}. "
+                f"Você está vendo **{ciclo_sel}**{trecho_sel}."
+            )
 
     aberta, msg_janela = avaliacao_entregas_aberta(id_disc, id_ciclo)
     if not aberta:
         st.warning(msg_janela)
-        st.caption("O coordenador define o período em **Configurações do Coordenador**.")
+        st.caption("O coordenador define o período em **Janela de avaliação da banca**.")
         st.stop()
 
     df_entrancia = ler_aba("Entrancia_Turma")

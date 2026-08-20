@@ -531,7 +531,7 @@ def _render_linha(
 
 
 def render(usuario: dict):
-    st.header("Conferir entregas")
+    st.header("Conferir notas grupos")
     st.caption(
         "Lance **A** e **C** (0 a 5). O **T** recalcula ao sair do campo. "
         "Colunas com largura fixa — ao rolar, **Sala** e **Gr.** permanecem visíveis."

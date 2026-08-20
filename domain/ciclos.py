@@ -126,6 +126,56 @@ def indice_ciclo_padrao(ciclos: pd.DataFrame, nomes: list[str]) -> int:
     return 0
 
 
+def _fmt_data_br(valor) -> str:
+    dia = _como_date(valor)
+    if dia is None:
+        return ""
+    return dia.strftime("%d/%m/%Y")
+
+
+def ciclo_academico_na_data(
+    ciclos: pd.DataFrame,
+    dia: date | None = None,
+) -> pd.Series | None:
+    """Ciclo cujo período acadêmico (início → apresentação) contém a data."""
+    if ciclos is None or ciclos.empty:
+        return None
+    alvo = _como_date(dia) or hoje_normalizado().date()
+    df = preparar_ciclos(ciclos)
+    if "Data_Inicio_Ciclo" not in df.columns or "Data_Apresentacao" not in df.columns:
+        return None
+    idxs = []
+    for idx, row in df.iterrows():
+        ini = _como_date(row.get("Data_Inicio_Ciclo"))
+        fim = _como_date(row.get("Data_Apresentacao"))
+        if ini is None or fim is None:
+            continue
+        if ini > fim:
+            ini, fim = fim, ini
+        if ini <= alvo <= fim:
+            idxs.append(idx)
+    if not idxs:
+        return None
+    return ordenar_ciclos(df.loc[idxs]).iloc[-1]
+
+
+def indice_ciclo_academico_padrao(ciclos: pd.DataFrame, nomes: list[str]) -> int:
+    """Índice do ciclo acadêmico vigente; senão cai no padrão de janela de pares."""
+    if not nomes:
+        return 0
+    vigente = ciclo_academico_na_data(ciclos)
+    if vigente is not None:
+        nome = str(vigente.get("Nome_Ciclo", "")).strip()
+        if nome in nomes:
+            return nomes.index(nome)
+    return indice_ciclo_padrao(ciclos, nomes)
+
+
+def periodo_academico_texto(row: pd.Series) -> tuple[str, str]:
+    """(início, fim) formatados dd/mm/aaaa a partir do período acadêmico do ciclo."""
+    return _fmt_data_br(row.get("Data_Inicio_Ciclo")), _fmt_data_br(row.get("Data_Apresentacao"))
+
+
 def ciclo_inativo(id_ciclo: str) -> bool:
     """Retorna True quando o ciclo não está mais em andamento."""
     df = ler_aba("Ciclos")

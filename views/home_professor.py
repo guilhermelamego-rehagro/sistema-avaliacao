@@ -3,9 +3,11 @@
 import streamlit as st
 
 from auth.supabase_auth import professor_e_orientador, usuario_e_coordenador
-from domain.ciclos import obter_disciplina_ativa
+from domain.anotacoes_daily import datas_dailies_disciplina
+from domain.ciclos import hoje_normalizado, obter_disciplina_ativa
 from navigation import (
     ROTA_COORD_CONFERIR,
+    ROTA_FREQ_PROGRAMACAO,
     ROTA_IMPORT_CANVAS,
     ROTA_LANCAR_BANCA,
     ROTA_MODERACAO,
@@ -34,6 +36,12 @@ def render(usuario: dict):
 
     if perfil == "Secretaria":
         _atalho(
+            "Programação de aulas e dailies",
+            "Agenda de aulas e reuniões que entram na frequência.",
+            ROTA_FREQ_PROGRAMACAO,
+            "home_sec_prog",
+        )
+        _atalho(
             "Controle de frequência",
             "Visão geral de presença por turma.",
             ROTA_FREQ_CONTROLE,
@@ -54,8 +62,14 @@ def render(usuario: dict):
     if professor_e_orientador(usuario):
         st.subheader("Atalhos")
         _atalho(
-            "Pares — acompanhamento",
-            "Veja alunos pendentes e médias parciais.",
+            "Programação de aulas e dailies",
+            "Veja (e, no modo coordenador, lance) as datas que entram na frequência.",
+            ROTA_FREQ_PROGRAMACAO,
+            "home_prof_prog",
+        )
+        _atalho(
+            "Avaliação de pares",
+            "Alunos pendentes e prévia de resultados.",
             ROTA_PARES_ACOMP,
             "home_prof_pares",
         )
@@ -65,6 +79,21 @@ def render(usuario: dict):
             ROTA_LANCAR_BANCA,
             "home_prof_banca",
         )
+        id_ativa, _ = obter_disciplina_ativa()
+        from views.prof_anotacoes_daily import pode_anotar
+        from navigation import ROTA_ANOTACOES_DAILY
+
+        if (
+            pode_anotar(usuario)
+            and id_ativa
+            and hoje_normalizado().date() in datas_dailies_disciplina(id_ativa)
+        ):
+            _atalho(
+                "Anotações da daily",
+                "Hoje tem daily. Registre o texto de orientação por grupo.",
+                ROTA_ANOTACOES_DAILY,
+                "home_prof_daily",
+            )
         _atalho(
             "Avaliação do orientador",
             "Grid de notas por aluno e ciclo.",

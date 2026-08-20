@@ -9,7 +9,8 @@ import streamlit as st
 
 from data.sheets import ler_aba
 from domain.presenca import carregar_base_presenca, compilar_grid_dailies, compilar_grid_frequencia
-from utils.disciplina import normalizar_id
+from domain.cadastros import carregar_disciplinas
+from utils.disciplina import normalizar_id, remapear_coluna_id_disciplina
 from utils.ordenacao import ordenar_grupos_lista
 from utils.preferencias_sala import multiselect_sala
 
@@ -27,6 +28,13 @@ def render(usuario: dict, tipo: str = "aulas"):
     df_entrancia = ler_aba("Entrancia_Turma")
     df_disciplinas = ler_aba("Disciplinas")
     df_alunos_base = ler_aba("Base_Alunos")
+    atuais = {
+        normalizar_id(row["ID_Disciplina"]): str(row.get("Nome_Disciplina", "")).strip()
+        for _, row in carregar_disciplinas().iterrows()
+        if normalizar_id(row.get("ID_Disciplina", ""))
+    }
+    if atuais:
+        df_entrancia = remapear_coluna_id_disciplina(df_entrancia, atuais)
 
     lista_opcoes = df_disciplinas.apply(
         lambda x: f"{x['ID_Disciplina']} - {x['Nome_Disciplina']}", axis=1
@@ -51,6 +59,13 @@ def render(usuario: dict, tipo: str = "aulas"):
     alunos_turma = df_entrancia[
         df_entrancia["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disciplina_sel)
     ].copy()
+    if alunos_turma.empty:
+        st.warning(
+            "Nenhum aluno na Entrância com este código de disciplina. "
+            "Se o cadastro foi recodificado (ex.: 20263TRI → TRIB), os vínculos da aba "
+            "Entrancia_Turma na planilha de produção ainda podem estar no código antigo."
+        )
+
     if "Email_Pessoal" in df_alunos_base.columns and "Turma_Ingresso" in df_alunos_base.columns:
         alunos_turma = pd.merge(
             alunos_turma,

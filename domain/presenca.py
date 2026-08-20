@@ -9,7 +9,7 @@ from config import ICONE_STATUS_PRESENCA, MINUTOS_PRESENCA
 from data.sheets import ler_aba, ler_aba_frequencia
 from domain.ciclos import hoje_normalizado
 from utils.datas import parse_data_planilha_series
-from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id
+from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id, remapear_coluna_id_disciplina
 
 
 @st.cache_data(ttl=900, show_spinner=False)
@@ -33,14 +33,7 @@ def carregar_base_presenca() -> dict:
     }
 
 
-def _preparar_entrancia(df_entrancia: pd.DataFrame) -> pd.DataFrame:
-    df = df_entrancia.copy()
-    df["Email_Limpo"] = df["Email_Pessoal"].astype(str).str.strip().str.lower()
-    df["ID_Disc_Limpo"] = df["ID_Disciplina"].map(normalizar_id)
-    return df
-
-
-def _mapa_ids_legado_calendario(df: pd.DataFrame) -> dict[str, str]:
+def _ids_atuais_disciplinas() -> dict[str, str]:
     try:
         from domain.cadastros import carregar_disciplinas
 
@@ -49,11 +42,27 @@ def _mapa_ids_legado_calendario(df: pd.DataFrame) -> dict[str, str]:
         return {}
     if discs is None or discs.empty:
         return {}
-    atuais = {
+    return {
         normalizar_id(row["ID_Disciplina"]): str(row.get("Nome_Disciplina", "")).strip()
         for _, row in discs.iterrows()
         if normalizar_id(row["ID_Disciplina"])
     }
+
+
+def _preparar_entrancia(df_entrancia: pd.DataFrame) -> pd.DataFrame:
+    df = df_entrancia.copy()
+    atuais = _ids_atuais_disciplinas()
+    if atuais:
+        df = remapear_coluna_id_disciplina(df, atuais)
+    df["Email_Limpo"] = df["Email_Pessoal"].astype(str).str.strip().str.lower()
+    df["ID_Disc_Limpo"] = df["ID_Disciplina"].map(normalizar_id)
+    return df
+
+
+def _mapa_ids_legado_calendario(df: pd.DataFrame) -> dict[str, str]:
+    atuais = _ids_atuais_disciplinas()
+    if not atuais:
+        return {}
     amostras = []
     nomes = df["Disciplina"] if "Disciplina" in df.columns else [""] * len(df)
     for codigo, nome in zip(df.get("ID_Disciplina", []), nomes):

@@ -8,7 +8,7 @@ import time
 import pandas as pd
 
 from config import ABAS_AVALIACAO, ABAS_FREQUENCIA
-from data.sheets import ler_aba, ler_aba_frequencia, salvar_aba, salvar_aba_frequencia
+from data.sheets import garantir_colunas_avaliacao, ler_aba, ler_aba_frequencia, salvar_aba, salvar_aba_frequencia
 from utils.datas import parse_data_planilha, parse_data_planilha_series
 from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id
 
@@ -18,11 +18,19 @@ COLUNAS_CICLOS = [
     "ID_Ciclo",
     "Nome_Ciclo",
     "ID_Disciplina",
+    "Data_Inicio_Ciclo",
+    "Data_Apresentacao",
     "Data início",
     "Data fim",
     "Status",
     "Ordem",
 ]
+COLUNAS_DATAS_CICLO = (
+    "Data_Inicio_Ciclo",
+    "Data_Apresentacao",
+    "Data início",
+    "Data fim",
+)
 COLUNAS_PROFESSORES = [
     "Disciplina",
     "Ciclo",
@@ -280,6 +288,44 @@ def alinhar_codigos_frequencia() -> list[str]:
     return avisos
 
 
+def inferir_pares_codigo_ciclos() -> list[tuple[str, str]]:
+    """Detecta 20263TRI / 20263TRI-C1 na aba Ciclos vs TRIB no cadastro."""
+    discs = carregar_disciplinas()
+    if discs.empty:
+        return []
+    atuais = {
+        normalizar_id(row["ID_Disciplina"]): str(row.get("Nome_Disciplina", "")).strip()
+        for _, row in discs.iterrows()
+        if normalizar_id(row["ID_Disciplina"])
+    }
+    try:
+        df = ler_aba("Ciclos")
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    amostras: list[tuple[str, str]] = []
+    for _, row in df.iterrows():
+        amostras.append((str(row.get("ID_Disciplina", "")), ""))
+        cid = normalizar_id(row.get("ID_Ciclo", ""))
+        if "-" in cid:
+            amostras.append((cid.split("-", 1)[0], ""))
+    mapa = mapa_codigo_disciplina_legado(atuais, amostras)
+    return [(antigo, novo) for antigo, novo in mapa.items() if antigo != novo]
+
+
+def alinhar_codigos_ciclos() -> list[str]:
+    """Atualiza Ciclos, avaliações e demais abas quando o código da disciplina mudou."""
+    avisos: list[str] = []
+    for antigo, novo in inferir_pares_codigo_ciclos():
+        partes = propagar_codigo_disciplina(antigo, novo)
+        if partes:
+            avisos.extend([f"{antigo} → {novo}: {msg}" for msg in partes])
+        else:
+            avisos.append(f"{antigo} → {novo}: nada a alterar")
+    return avisos
+
+
 def propagar_codigo_frequencia(antigo: str, novo: str) -> list[str]:
     antigo = normalizar_id(antigo)
     novo = normalizar_id(novo)
@@ -312,16 +358,39 @@ def _fmt_data_planilha(valor) -> str:
     return pd.Timestamp(parsed).strftime("%d/%m/%Y")
 
 
-def _datas_para_editor(serie: pd.Series) -> list:
-    """Converte serial do Sheets ou dd/mm/aaaa em date; vazio vira None (não 01/01/1970)."""
-    parsed = parse_data_planilha_series(serie)
-    saida = []
-    for valor in parsed:
+def _valor_para_datetime_editor(valor):
+    if valor is None:
+        return pd.NaT
+    try:
         if pd.isna(valor):
-            saida.append(None)
-        else:
-            saida.append(pd.Timestamp(valor).date())
-    return saida
+            return pd.NaT
+    except (TypeError, ValueError):
+        pass
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto or texto.lower() in ("nan", "none", "nat"):
+            return pd.NaT
+    parsed = parse_data_planilha(valor)
+    if pd.isna(parsed):
+        return pd.NaT
+    return pd.Timestamp(parsed).normalize()
+
+
+def _datas_para_editor(serie: pd.Series) -> pd.Series:
+    """datetime64[ns] — compatível com Arrow/Streamlit (object+date vira STRING se misturar)."""
+    convertido = serie.map(_valor_para_datetime_editor)
+    return pd.to_datetime(convertido, errors="coerce")
+
+
+def normalizar_df_ciclos_editor(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Garante tipos compatíveis com st.data_editor (DateColumn exige date/datetime, não string)."""
+    if df is None or df.empty:
+        return pd.DataFrame({col: pd.Series(dtype="datetime64[ns]" if col in COLUNAS_DATAS_CICLO else "object") for col in COLUNAS_CICLOS})
+    out = _garantir_colunas(df.copy(), COLUNAS_CICLOS)
+    for col in COLUNAS_DATAS_CICLO:
+        if col in out.columns:
+            out[col] = _datas_para_editor(out[col])
+    return out
 
 
 def carregar_ciclos() -> pd.DataFrame:
@@ -330,26 +399,33 @@ def carregar_ciclos() -> pd.DataFrame:
     except Exception:
         df = pd.DataFrame()
     df = _garantir_colunas(df, COLUNAS_CICLOS)
+    try:
+        garantir_colunas_avaliacao("Ciclos", COLUNAS_CICLOS)
+    except Exception:
+        pass
     df["ID_Ciclo"] = df["ID_Ciclo"].map(normalizar_id)
     df["Nome_Ciclo"] = df["Nome_Ciclo"].astype(str).str.strip()
     df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
     df["Status"] = df["Status"].map(_status_norm)
     df["Ordem"] = pd.to_numeric(df["Ordem"], errors="coerce")
-    for col in ("Data início", "Data fim"):
-        df[col] = _datas_para_editor(df[col])
+    df = normalizar_df_ciclos_editor(df)
     if "ID_Disciplina" in df.columns:
         df = df.sort_values(["ID_Disciplina", "Ordem"], na_position="last")
     return df
 
 
 def salvar_ciclos(df: pd.DataFrame) -> str | None:
+    try:
+        garantir_colunas_avaliacao("Ciclos", COLUNAS_CICLOS)
+    except Exception:
+        pass
     df = _garantir_colunas(df, COLUNAS_CICLOS)
     df["ID_Ciclo"] = df["ID_Ciclo"].map(normalizar_id)
     df["Nome_Ciclo"] = df["Nome_Ciclo"].astype(str).str.strip()
     df["ID_Disciplina"] = df["ID_Disciplina"].map(normalizar_id)
     df["Status"] = df["Status"].map(_status_norm)
-    df["Data início"] = df["Data início"].map(_fmt_data_planilha)
-    df["Data fim"] = df["Data fim"].map(_fmt_data_planilha)
+    for col in COLUNAS_DATAS_CICLO:
+        df[col] = df[col].map(_fmt_data_planilha)
     df["Ordem"] = pd.to_numeric(df["Ordem"], errors="coerce")
     df = df[df["ID_Ciclo"].ne("") | df["Nome_Ciclo"].ne("")]
     if df.empty:
@@ -513,3 +589,32 @@ def salvar_professores(df: pd.DataFrame) -> str | None:
         return "Orientador precisa da sala (é filtrado pela sala do aluno na avaliação do curso)."
     salvar_aba("Config_Professores", df, _colunas_gravacao(df, COLUNAS_PROFESSORES))
     return None
+
+
+def salas_do_orientador(usuario: dict, id_disciplina: str | None = None) -> list[str]:
+    """Salas cadastradas para a professora orientadora nesta disciplina."""
+    nome = str((usuario or {}).get("nome") or "").strip().lower()
+    if not nome:
+        return []
+    df = carregar_professores()
+    if df.empty:
+        return []
+    filtro = df[
+        (df["Tipo"].astype(str).str.strip().str.title() == "Orientador")
+        & (df["Professor"].astype(str).str.strip().str.lower() == nome)
+    ]
+    if id_disciplina:
+        id_limpo = normalizar_id(id_disciplina)
+        com_disc = filtro[filtro["ID_Disciplina"].map(normalizar_id) == id_limpo]
+        if not com_disc.empty:
+            filtro = com_disc
+    salas = sorted(
+        {str(s).strip() for s in filtro["Sala"].tolist() if str(s).strip()},
+        key=lambda x: (len(x), x),
+    )
+    return salas
+
+
+def sala_padrao_orientador(usuario: dict, id_disciplina: str | None = None) -> str:
+    salas = salas_do_orientador(usuario, id_disciplina)
+    return salas[0] if len(salas) == 1 else (salas[0] if salas else "")

@@ -6,9 +6,8 @@ from dataclasses import dataclass
 
 import streamlit as st
 
-from auth.supabase_auth import professor_e_orientador, usuario_e_coordenador
-from domain.ciclos import obter_disciplina_ativa
-from domain.entregas import disciplina_com_entregas_abertas
+# Rotas primeiro: outros módulos importam estes nomes no carregamento.
+# Se domain/auth forem importados aqui, o ciclo quebra o login (ImportError).
 
 # --- Rotas internas (estáveis no código) ---
 ROTA_INICIO = "inicio"
@@ -29,7 +28,9 @@ ROTA_PARES_ACOMP = "pares_acompanhamento"
 ROTA_MODERACAO = "moderacao"
 ROTA_ORIENTADOR = "orientador"
 ROTA_LANCAR_BANCA = "lancar_banca"
+ROTA_ANOTACOES_DAILY = "anotacoes_daily"
 ROTA_FREQ_CONTROLE = "freq_controle"
+ROTA_FREQ_PROGRAMACAO = "freq_programacao"
 ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
 ROTA_IMPORT_CANVAS = "import_canvas"
 ROTA_LIBERAR_NOTAS = "liberar_notas"
@@ -47,6 +48,7 @@ ROTA_FREQ_ENCONTRO = "freq_encontro"
 ROTAS_LAYOUT_LARGO = frozenset(
     {
         ROTA_FREQ_CONTROLE,
+        ROTA_FREQ_PROGRAMACAO,
         ROTA_FREQ_DAILIES_PROF,
         ROTA_FREQ_ENCONTRO,
         ROTA_ORIENTADOR,
@@ -57,6 +59,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_COORD_PLANEJAMENTO,
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
+        ROTA_ANOTACOES_DAILY,
     }
 )
 
@@ -108,26 +111,18 @@ def rota_padrao(usuario: dict, perfil: str) -> str:
     if perfil == "Secretaria":
         return ROTA_FREQ_CONTROLE
     if perfil == "Professor":
-        tipo = usuario.get("tipo_professor") or "Orientador"
-        if tipo == "Especialista":
-            return ROTA_LANCAR_BANCA
-        return ROTA_FREQ_CONTROLE
+        return ROTA_FREQ_PROGRAMACAO
     return ROTA_INICIO
 
 
 def pode_gerenciar_liberacao_notas(usuario: dict) -> bool:
+    from auth.supabase_auth import professor_e_orientador, usuario_e_coordenador
+
     if professor_e_orientador(usuario):
         return True
     if usuario.get("perfil") == "Professor" and usuario_e_coordenador(usuario):
         return bool(st.session_state.get("modo_coordenador", False))
     return False
-
-
-def _rotulo_lancar_banca() -> str:
-    id_disc, _ = obter_disciplina_ativa()
-    if id_disc and disciplina_com_entregas_abertas(id_disc):
-        return "Lançar notas da banca (janela aberta)"
-    return "Lançar notas da banca"
 
 
 def _item_liberacao_notas() -> ItemMenu:
@@ -136,7 +131,7 @@ def _item_liberacao_notas() -> ItemMenu:
 
 def _secoes_aluno() -> list[SecaoMenu]:
     return [
-        SecaoMenu(None, (ItemMenu(ROTA_INICIO, "Início"),)),
+        SecaoMenu(None, (ItemMenu(ROTA_INICIO, "Calendário"),)),
         SecaoMenu(
             "Avaliar",
             (
@@ -158,19 +153,25 @@ def _secoes_aluno() -> list[SecaoMenu]:
 
 
 def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[SecaoMenu]:
+    from auth.supabase_auth import professor_e_orientador
+
     itens_avaliacoes: list[ItemMenu] = [
-        ItemMenu(ROTA_PARES_ACOMP, "Pares — acompanhamento"),
-        ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
-        ItemMenu(ROTA_MODERACAO, "Moderação de comentários"),
+        ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"),
     ]
+    if professor_e_orientador(usuario) or modo_coordenador:
+        itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+    itens_avaliacoes.extend(
+        [
+            ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
+            ItemMenu(ROTA_PARES_ACOMP, "Avaliação de pares"),
+            ItemMenu(ROTA_MODERACAO, "Moderação de comentários"),
+        ]
+    )
     if professor_e_orientador(usuario):
         itens_avaliacoes.append(_item_liberacao_notas())
 
     secoes: list[SecaoMenu] = [
-        SecaoMenu(
-            "Entregas",
-            (ItemMenu(ROTA_LANCAR_BANCA, _rotulo_lancar_banca()),),
-        ),
+        SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),)),
         SecaoMenu("Avaliações do ciclo", tuple(itens_avaliacoes)),
         SecaoMenu(
             "Presença",
@@ -208,9 +209,10 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
 
 def _secoes_especialista() -> list[SecaoMenu]:
     return [
+        SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),)),
         SecaoMenu(
-            "Entregas",
-            (ItemMenu(ROTA_LANCAR_BANCA, _rotulo_lancar_banca()),),
+            "Avaliações do ciclo",
+            (ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"),),
         ),
     ]
 
@@ -220,6 +222,7 @@ def _secoes_secretaria() -> list[SecaoMenu]:
         SecaoMenu(
             "Presença",
             (
+                ItemMenu(ROTA_FREQ_PROGRAMACAO, "Programação de aulas e dailies"),
                 ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),
                 ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
             ),
@@ -267,6 +270,8 @@ def renderizar_sidebar(usuario: dict, perfil: str) -> str:
     st.sidebar.title(titulo_sidebar(perfil, usuario))
 
     if perfil == "Professor":
+        from auth.supabase_auth import usuario_e_coordenador
+
         tipo = usuario.get("tipo_professor") or "Orientador"
         st.sidebar.caption(f"Tipo de professor: **{tipo}**")
         if usuario_e_coordenador(usuario):

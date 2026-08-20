@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from data.sheets import ler_aba
 from utils.datas import parse_data_planilha_series
+from utils.disciplina import normalizar_id
 
 
 def hoje_normalizado() -> pd.Timestamp:
@@ -31,7 +32,7 @@ def _obter_disciplina_ativa_cached():
 
 def preparar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
     df = df_ciclos.copy()
-    for col in ("Data início", "Data fim"):
+    for col in ("Data início", "Data fim", "Data_Inicio_Ciclo", "Data_Apresentacao"):
         if col in df.columns:
             df[col] = parse_data_planilha_series(df[col])
     return df
@@ -47,7 +48,22 @@ def filtrar_ciclos_ativos(df_ciclos: pd.DataFrame, hoje: pd.Timestamp | None = N
 
 def ciclos_da_disciplina(df_ciclos: pd.DataFrame, id_disciplina: str) -> pd.DataFrame:
     df = preparar_ciclos(df_ciclos)
-    return df[df["ID_Disciplina"].astype(str).str.strip() == str(id_disciplina).strip()]
+    alvo = str(id_disciplina).strip()
+    try:
+        from domain.cadastros import carregar_disciplinas
+        from utils.disciplina import remapear_coluna_id_disciplina
+
+        discs = carregar_disciplinas()
+        atuais = {
+            str(row["ID_Disciplina"]).strip(): str(row.get("Nome_Disciplina", "")).strip()
+            for _, row in discs.iterrows()
+            if str(row.get("ID_Disciplina", "")).strip()
+        }
+        if atuais:
+            df = remapear_coluna_id_disciplina(df, atuais)
+    except Exception:
+        pass
+    return df[df["ID_Disciplina"].astype(str).str.strip() == alvo]
 
 
 def ordenar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
@@ -123,3 +139,53 @@ def ciclo_inativo(id_ciclo: str) -> bool:
         return not ativo_status
     ativo_data = (hoje >= inicio) & (hoje <= fim)
     return not (ativo_status or ativo_data)
+
+
+def _como_date(valor) -> date | None:
+    if valor is None:
+        return None
+    try:
+        if pd.isna(valor):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(valor, date) and not isinstance(valor, datetime):
+        return valor
+    try:
+        return pd.Timestamp(valor).date()
+    except Exception:
+        return None
+
+
+def ciclo_na_data(id_disciplina: str, dia: date) -> tuple[str, str]:
+    """(ID_Ciclo, Nome_Ciclo) pelo período acadêmico; vazio se não houver recorte."""
+    alvo = _como_date(dia)
+    if alvo is None or not id_disciplina:
+        return "", ""
+    try:
+        from domain.cadastros import carregar_ciclos
+
+        df = carregar_ciclos()
+    except Exception:
+        return "", ""
+    df = ciclos_da_disciplina(df, id_disciplina)
+    if df.empty:
+        return "", ""
+    df = preparar_ciclos(df)
+    if "Data_Inicio_Ciclo" not in df.columns or "Data_Apresentacao" not in df.columns:
+        return "", ""
+    idxs = []
+    for idx, row in df.iterrows():
+        ini = _como_date(row.get("Data_Inicio_Ciclo"))
+        fim = _como_date(row.get("Data_Apresentacao"))
+        if ini is None or fim is None:
+            continue
+        if ini > fim:
+            ini, fim = fim, ini
+        if ini <= alvo <= fim:
+            idxs.append(idx)
+    if not idxs:
+        return "", ""
+    bloco = ordenar_ciclos(df.loc[idxs])
+    row = bloco.iloc[-1]
+    return normalizar_id(row.get("ID_Ciclo", "")), str(row.get("Nome_Ciclo", "")).strip()

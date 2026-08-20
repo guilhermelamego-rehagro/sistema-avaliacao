@@ -3,8 +3,8 @@
 import pandas as pd
 import streamlit as st
 
-from data.sheets import ler_aba, ler_aba_frequencia
-from domain.ciclos import indice_ciclo_padrao, ordenar_ciclos
+from data.sheets import ler_aba
+from domain.ciclos import ciclos_da_disciplina, indice_ciclo_padrao, ordenar_ciclos
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from domain.entregas import (
     avaliacao_entregas_aberta,
@@ -18,6 +18,7 @@ from domain.entregas import (
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.preferencias_sala import selectbox_sala
+from navigation import ir_para, ROTA_FREQ_PROGRAMACAO
 
 
 def _chave_lista_ordem(id_disc: str, id_ciclo: str, sala: str) -> str:
@@ -95,7 +96,7 @@ def render(usuario: dict):
     id_disc = id_disciplina_por_nome(df_disc, disc_sel)
 
     df_ciclos = ler_aba("Ciclos")
-    ciclos = df_ciclos[df_ciclos["ID_Disciplina"].astype(str).str.strip() == id_disc]
+    ciclos = ciclos_da_disciplina(df_ciclos, id_disc)
     ciclos = ordenar_ciclos(ciclos_visiveis_avaliacao(ciclos, id_disc))
     if ciclos.empty:
         st.warning("Nenhum ciclo cadastrado.")
@@ -151,24 +152,10 @@ def render(usuario: dict):
     with aba_cal:
         st.subheader("Datas de aulas e reuniões diárias")
         st.caption(
-            "Edite quais datas contam para frequência (Calendario_Aulas) "
-            "e para nota de dailies (Calendario_Dailies)."
+            "O lançamento do calendário agora é feito no app, na tela "
+            "**Programação de aulas e dailies** (menu Presença). "
+            "Com o modo coordenador ativo você gera e salva as datas; "
+            "os professores veem a agenda da disciplina."
         )
-        try:
-            df_aulas = ler_aba_frequencia("Calendario_Aulas")
-            st.markdown("**Calendário de Aulas**")
-            st.data_editor(df_aulas, width="stretch", num_rows="dynamic", key="coord_cal_aulas")
-        except Exception as e:
-            st.warning(f"Não foi possível carregar Calendario_Aulas: {e}")
-
-        try:
-            df_dailies = ler_aba_frequencia("Calendario_Dailies")
-            st.markdown("**Calendário de Dailies**")
-            st.data_editor(df_dailies, width="stretch", num_rows="dynamic", key="coord_cal_dailies")
-        except Exception as e:
-            st.warning(f"Não foi possível carregar Calendario_Dailies: {e}")
-
-        st.info(
-            "A persistência automática do calendário será habilitada na próxima etapa. "
-            "Por ora, use a planilha de frequência diretamente se precisar alterar com urgência."
-        )
+        if st.button("Abrir programação de aulas e dailies", type="primary", key="coord_abrir_cal"):
+            ir_para(ROTA_FREQ_PROGRAMACAO)

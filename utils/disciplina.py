@@ -74,3 +74,22 @@ def mapa_codigo_disciplina_legado(
         elif cands:
             mapa[velho] = max(cands, key=len)
     return mapa
+
+
+def remapear_coluna_id_disciplina(
+    df: pd.DataFrame,
+    ids_atuais: dict[str, str],
+    coluna: str = "ID_Disciplina",
+    coluna_nome: str | None = None,
+) -> pd.DataFrame:
+    """Substitui códigos antigos na coluna pelo ID atual do cadastro de disciplinas."""
+    if df is None or df.empty or coluna not in df.columns:
+        return df
+    nomes = df[coluna_nome] if coluna_nome and coluna_nome in df.columns else [""] * len(df)
+    amostras = list(zip(df[coluna], nomes))
+    mapa = mapa_codigo_disciplina_legado(ids_atuais, amostras)
+    if not mapa:
+        return df
+    out = df.copy()
+    out[coluna] = out[coluna].map(lambda v: mapa.get(normalizar_id(v), v))
+    return out

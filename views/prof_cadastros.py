@@ -6,14 +6,17 @@ import pandas as pd
 import streamlit as st
 
 from domain.cadastros import (
+    COLUNAS_CICLOS,
     ENCONTRO_OPCOES,
     STATUS_OPCOES,
     TIPOS_PROFESSOR_CONFIG,
     carregar_ciclos,
     carregar_disciplinas,
     carregar_professores,
+    normalizar_df_ciclos_editor,
     pares_codigo_alterado,
     alinhar_codigos_frequencia,
+    alinhar_codigos_ciclos,
     propagar_codigo_disciplina,
     salvar_ciclos,
     salvar_disciplinas,
@@ -408,15 +411,39 @@ def _render_datas_encontro_card(usuario: dict, id_disc: str, card_idx: int):
             st.rerun()
 
 
+def _df_ciclos_para_editor(df: pd.DataFrame, filtro: str) -> pd.DataFrame:
+    out = normalizar_df_ciclos_editor(df.copy())
+    if filtro != "(todas)":
+        id_filtro = filtro.split(" — ")[0].strip()
+        out = out[out["ID_Disciplina"].astype(str).str.strip() == id_filtro]
+        out = out.sort_values("Ordem", na_position="last")
+    else:
+        out = out.sort_values(["ID_Disciplina", "Ordem"], na_position="last")
+    return out.reset_index(drop=True)
+
+
+def _montar_df_salvar_ciclos(base: pd.DataFrame, edited: pd.DataFrame, filtro: str) -> pd.DataFrame:
+    bloco = normalizar_df_ciclos_editor(edited)
+    if filtro == "(todas)":
+        return bloco
+    id_filtro = filtro.split(" — ")[0].strip()
+    resto = normalizar_df_ciclos_editor(base)
+    resto = resto[resto["ID_Disciplina"].astype(str).str.strip() != id_filtro]
+    return normalizar_df_ciclos_editor(pd.concat([resto, bloco], ignore_index=True))
+
+
 def render_ciclos(usuario: dict):
     st.header("Cadastro de ciclos")
     st.caption(
-        "Edita a aba **Ciclos**. A coluna **Ordem** vale **dentro de cada disciplina** "
-        "(1, 2, 3… naquela disciplina). O Ciclo 1 de outra disciplina também pode ser 1. "
-        "Datas no formato do calendário; status **ativo** abre a avaliação do curso naquele período. "
+        "Cada ciclo tem **duas linhas do tempo**. **Início do ciclo** e **Apresentação de projeto** "
+        "marcam o período acadêmico (dailies e anotações). **Abertura** e **encerramento das pares** "
+        "são a janela em que o aluno avalia os colegas — preencha manualmente. "
+        "A coluna **Ordem** vale dentro de cada disciplina (1, 2, 3…). "
+        "Status **ativo** ainda entra na avaliação do curso na janela de pares. "
         "Se a disciplina tiver **encontro presencial** e a entrega final for avaliação própria, "
-        "cadastre também o ciclo **Entrega Final** (o sistema cria esse ciclo quando você confirma "
-        "na pergunta ao ativar a disciplina)."
+        "cadastre também o ciclo **Entrega Final**.\n\n"
+        "Edite a grade abaixo e clique em **Salvar ciclos** ao terminar (as alterações só vão "
+        "para a planilha nesse botão)."
     )
     df_disc = carregar_disciplinas()
     ids_disc = _ids_disciplina(df_disc)
@@ -424,63 +451,101 @@ def render_ciclos(usuario: dict):
         st.warning("Cadastre ao menos uma disciplina antes dos ciclos.")
         return
 
-    chave = "cad_ciclos_edit_v2"
+    chave = "cad_ciclos_edit_v3"
+    ver_ed = "cad_ciclos_editor_ver"
     if chave not in st.session_state:
         st.session_state[chave] = carregar_ciclos()
+    elif any(col not in st.session_state[chave].columns for col in COLUNAS_CICLOS):
+        st.session_state[chave] = carregar_ciclos()
+        st.session_state[ver_ed] = int(st.session_state.get(ver_ed, 0)) + 1
+    if ver_ed not in st.session_state:
+        st.session_state[ver_ed] = 0
 
     filtro = st.selectbox(
         "Filtrar por disciplina:",
         ["(todas)"] + [_rotulo_disc(df_disc, i) for i in ids_disc],
         key="cad_ciclo_filtro",
     )
-    df_edit = st.session_state[chave].copy()
-    if filtro != "(todas)":
-        id_filtro = filtro.split(" — ")[0].strip()
-        df_edit = df_edit[df_edit["ID_Disciplina"].astype(str).str.strip() == id_filtro]
-        df_edit = df_edit.sort_values("Ordem", na_position="last")
-    else:
-        df_edit = df_edit.sort_values(["ID_Disciplina", "Ordem"], na_position="last")
+    df_edit = _df_ciclos_para_editor(st.session_state[chave], filtro)
+    editor_key = f"editor_ciclos_v3_{filtro}_{st.session_state[ver_ed]}"
 
-    edited = st.data_editor(
-        df_edit,
-        column_config={
-            "ID_Ciclo": st.column_config.TextColumn("ID do ciclo", required=True),
-            "Nome_Ciclo": st.column_config.TextColumn("Nome", required=True),
-            "ID_Disciplina": st.column_config.SelectboxColumn(
-                "Disciplina", options=ids_disc, required=True
-            ),
-            "Data início": st.column_config.DateColumn("Início", format="DD/MM/YYYY"),
-            "Data fim": st.column_config.DateColumn("Fim", format="DD/MM/YYYY"),
-            "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPCOES, required=True),
-            "Ordem": st.column_config.NumberColumn(
-                "Ordem na disciplina",
-                min_value=1,
-                step=1,
-                help="Sequência só desta disciplina. Cada disciplina tem o próprio 1, 2, 3…",
-            ),
-        },
-        num_rows="dynamic",
-        width="stretch",
-        hide_index=True,
-        key=f"editor_ciclos_v2_{filtro}",
-    )
+    with st.form("cad_ciclos_form", border=False):
+        edited = st.data_editor(
+            df_edit,
+            column_config={
+                "ID_Ciclo": st.column_config.TextColumn("ID do ciclo", required=True),
+                "Nome_Ciclo": st.column_config.TextColumn("Nome", required=True),
+                "ID_Disciplina": st.column_config.SelectboxColumn(
+                    "Disciplina", options=ids_disc, required=True
+                ),
+                "Data_Inicio_Ciclo": st.column_config.DateColumn(
+                    "Início do ciclo",
+                    format="DD/MM/YYYY",
+                    help="Primeiro dia acadêmico deste ciclo (dailies e anotações).",
+                ),
+                "Data_Apresentacao": st.column_config.DateColumn(
+                    "Apresentação de projeto",
+                    format="DD/MM/YYYY",
+                    help="Término acadêmico do ciclo; em geral a segunda da apresentação.",
+                ),
+                "Data início": st.column_config.DateColumn(
+                    "Abertura das pares",
+                    format="DD/MM/YYYY",
+                    help="Quando o aluno pode começar a avaliação de pares.",
+                ),
+                "Data fim": st.column_config.DateColumn(
+                    "Encerramento das pares",
+                    format="DD/MM/YYYY",
+                    help="Último dia da avaliação de pares.",
+                ),
+                "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPCOES, required=True),
+                "Ordem": st.column_config.NumberColumn(
+                    "Ordem na disciplina",
+                    min_value=1,
+                    step=1,
+                    help="Sequência só desta disciplina. Cada disciplina tem o próprio 1, 2, 3…",
+                ),
+            },
+            column_order=[c for c in COLUNAS_CICLOS if c in df_edit.columns],
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key=editor_key,
+        )
+        salvar = st.form_submit_button("Salvar ciclos", type="primary", width="stretch")
 
-    if st.button("Salvar ciclos", type="primary"):
-        base = st.session_state[chave].copy()
-        if filtro != "(todas)":
-            id_filtro = filtro.split(" — ")[0].strip()
-            resto = base[base["ID_Disciplina"].astype(str).str.strip() != id_filtro]
-            df_save = pd.concat([resto, edited], ignore_index=True)
-        else:
-            df_save = edited
+    if salvar:
+        df_save = _montar_df_salvar_ciclos(st.session_state[chave], edited, filtro)
         erro = salvar_ciclos(df_save)
         if erro:
             st.error(erro)
         else:
             registrar_log(usuario["email"], usuario["nome"], "Atualizou cadastro de ciclos")
             st.session_state[chave] = carregar_ciclos()
+            st.session_state[ver_ed] = int(st.session_state[ver_ed]) + 1
+            _reset_data_editor_widget(editor_key)
             st.success("Ciclos salvos na planilha.")
             st.rerun()
+
+    st.caption(
+        "Se o código da disciplina mudou (ex.: 20263TRI → TRIB) e os ciclos não aparecem "
+        "na disciplina nova, alinhe os IDs nas abas Ciclos, Avaliações e respostas do curso."
+    )
+    if st.button("Alinhar códigos antigos nas abas de ciclos e avaliações", key="cad_ciclo_alinhar"):
+        with st.spinner("Atualizando IDs antigos nas abas de avaliação…"):
+            avisos = alinhar_codigos_ciclos()
+        if not avisos:
+            st.info("Não encontrei código antigo nos ciclos. Os IDs já coincidem com o cadastro.")
+        else:
+            registrar_log(
+                usuario["email"],
+                usuario["nome"],
+                "Alinhou códigos de disciplina nas abas de ciclos e avaliações",
+            )
+            st.session_state[chave] = carregar_ciclos()
+            for msg in avisos:
+                st.write(f"- {msg}")
+            st.success("Códigos alinhados.")
 
 
 def render_professores(usuario: dict):

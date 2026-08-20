@@ -7,7 +7,7 @@ import time
 import streamlit as st
 import gspread
 import pandas as pd
-from gspread.exceptions import APIError
+from gspread.exceptions import APIError, GSpreadException
 from oauth2client.service_account import ServiceAccountCredentials
 
 from config import ABAS_AVALIACAO, ABAS_FREQUENCIA
@@ -19,6 +19,8 @@ __all__ = [
     "preparar_ambiente_planilhas",
     "garantir_aba_avaliacao",
     "garantir_aba_frequencia",
+    "garantir_colunas_avaliacao",
+    "garantir_colunas_frequencia",
     "ler_aba",
     "ler_aba_frequencia",
     "salvar_aba",
@@ -246,14 +248,76 @@ class _PlanilhaProxy:
 planilha = _PlanilhaProxy()
 
 
+def _estender_cabecalho(ws, nome_aba: str, colunas: list[str], marca_prefixo: str) -> bool:
+    marca = f"{marca_prefixo}_{nome_aba}"
+    esperadas = tuple(colunas)
+    if st.session_state.get(marca) == esperadas:
+        return False
+    atual = [str(h).strip() for h in _requisitar_com_retry(ws.row_values, 1)]
+    atual = [h for h in atual if h]
+    faltando = [c for c in colunas if c not in atual]
+    if not faltando:
+        st.session_state[marca] = esperadas
+        return False
+    novo = atual + faltando
+    _requisitar_com_retry(ws.update, range_name="A1", values=[novo])
+    limpar_cache_planilhas()
+    st.session_state[marca] = esperadas
+    return True
+
+
+def garantir_colunas_avaliacao(nome_aba: str, colunas: list[str]) -> bool:
+    """Acrescenta colunas novas no cabeçalho da planilha de avaliação."""
+    if not colunas:
+        return False
+    ws = _worksheet_avaliacao(nome_aba)
+    return _estender_cabecalho(ws, nome_aba, colunas, "_aval_hdr")
+
+
+def garantir_colunas_frequencia(nome_aba: str, colunas: list[str]) -> bool:
+    """Acrescenta colunas novas no cabeçalho sem apagar as linhas já lançadas."""
+    marca = f"_freq_hdr_{nome_aba}"
+    esperadas = tuple(colunas)
+    if st.session_state.get(marca) == esperadas:
+        return False
+    if nome_aba not in ABAS_FREQUENCIA or not colunas:
+        return False
+    garantir_aba_frequencia(nome_aba)
+    ws = _worksheet_frequencia(nome_aba)
+    atual = [str(h).strip() for h in _requisitar_com_retry(ws.row_values, 1)]
+    atual = [h for h in atual if h]
+    faltando = [c for c in colunas if c not in atual]
+    if not faltando:
+        st.session_state[marca] = esperadas
+        return False
+    novo = atual + faltando
+    _requisitar_com_retry(ws.update, range_name="A1", values=[novo])
+    limpar_cache_planilhas()
+    st.session_state[marca] = esperadas
+    return True
+
+
 def _ler_registros(ws, colunas_config: list[str] | None, *, frequencia: bool = False) -> list[dict]:
     kwargs_fn = _kwargs_get_all_records_frequencia if frequencia else _kwargs_get_all_records
     kwargs = kwargs_fn(colunas_config)
+
+    def _chamar(parametros: dict) -> list[dict]:
+        try:
+            return _requisitar_com_retry(ws.get_all_records, **parametros)
+        except TypeError:
+            fallback = dict(parametros)
+            fallback.pop("value_render_option", None)
+            return _requisitar_com_retry(ws.get_all_records, **fallback)
+
     try:
-        return _requisitar_com_retry(ws.get_all_records, **kwargs)
-    except TypeError:
-        kwargs.pop("value_render_option", None)
-        return _requisitar_com_retry(ws.get_all_records, **kwargs)
+        return _chamar(kwargs)
+    except (GSpreadException, KeyError, ValueError):
+        if not kwargs.get("expected_headers"):
+            raise
+        sem_esperado = dict(kwargs)
+        sem_esperado.pop("expected_headers", None)
+        sem_esperado.pop("numericise_ignore", None)
+        return _chamar(sem_esperado)
 
 
 @st.cache_data(ttl=_CACHE_TTL, show_spinner=False)

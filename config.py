@@ -89,6 +89,18 @@ ABAS_AVALIACAO = {
         "Nome_Lancador",
         "Data_Lancamento",
     ],
+    "Anotacoes_Daily": [
+        "Data",
+        "ID_Disciplina",
+        "ID_Ciclo",
+        "Nome_Ciclo",
+        "Sala",
+        "Grupo",
+        "Texto",
+        "Email_Orientador",
+        "Nome_Orientador",
+        "Data_Atualizacao",
+    ],
     "Matrizes": [
         "ID_Matriz",
         "Nome",
@@ -161,6 +173,18 @@ ABAS_AVALIACAO = {
 
 # Aba nova na planilha de frequência
 ABAS_FREQUENCIA = {
+    "Calendario_Aulas": [
+        "Data",
+        "ID_Disciplina",
+        "Disciplina",
+        "Categoria",
+        "Detalhe",
+    ],
+    "Calendario_Dailies": [
+        "Data",
+        "ID_Disciplina",
+        "Disciplina",
+    ],
     "Calendario_Unificado": [
         "Data",
         "ID_Disciplina",
@@ -170,6 +194,13 @@ ABAS_FREQUENCIA = {
         "Conta_Nota_Daily",
         "Presencial",
         "Descricao",
+    ],
+    "Calendario_Institucional": [
+        "Data",
+        "Tipo",
+        "Nome",
+        "Origem",
+        "Ativo",
     ],
 }
 

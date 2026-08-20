@@ -42,9 +42,11 @@ from navigation import (
     ROTA_FREQ_DAILIES,
     ROTA_FREQ_DAILIES_PROF,
     ROTA_FREQ_ENCONTRO,
+    ROTA_FREQ_PROGRAMACAO,
     ROTA_IMPORT_CANVAS,
     ROTA_INICIO,
     ROTA_LANCAR_BANCA,
+    ROTA_ANOTACOES_DAILY,
     ROTA_LIBERAR_NOTAS,
     ROTA_MINHAS_NOTAS,
     ROTA_AVALIACAO_GRUPO_ALUNO,
@@ -59,7 +61,7 @@ from navigation import (
 )
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_cadastros, prof_controle_presenca, prof_liberacao_notas, prof_planejamento, prof_presenca_encontro
+from views import home_aluno, prof_anotacoes_daily, prof_cadastros, prof_calendario, prof_controle_presenca, prof_liberacao_notas, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 
 # 1. Configurações Iniciais da Página
@@ -474,7 +476,7 @@ else:
     # MÓDULO DO PROFESSOR: PAINEL GERAL
     # ------------------------------------------
     elif menu == ROTA_PARES_ACOMP and perfil == "Professor" and professor_e_orientador(aluno):
-        st.header("Pares — acompanhamento")
+        st.header("Avaliação de pares")
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
@@ -546,7 +548,7 @@ else:
         if nome_busca:
             df_alunos_esperados = df_alunos_esperados[df_alunos_esperados['Nome_Completo'].str.contains(nome_busca, case=False, na=False)]
             
-        aba_pendentes, aba_resultados = st.tabs(["⏳ Alunos Pendentes", "📊 Prévia de Resultados"])
+        aba_pendentes, aba_resultados = st.tabs(["Alunos pendentes", "Prévia de resultados"])
         
         # ---------------------------------------------------------
         # ABA PENDENTES (Retirada a coluna E-mail)
@@ -589,77 +591,93 @@ else:
         with aba_resultados:
             st.subheader("Médias parciais calculadas para os alunos")
             votos_ciclo = df_aval[df_aval['ID_Ciclo'].astype(str).str.strip().isin(ids_ciclo_alvo)].copy()
-            
-            if votos_ciclo.empty:
-                st.info("Nenhum voto registrado para os critérios selecionados.")
-            else:
+            if not votos_ciclo.empty:
                 votos_ciclo['Nota'] = pd.to_numeric(votos_ciclo['Nota'], errors='coerce')
-                
-                # Agrupamento dinâmico que funciona tanto para um ciclo individual quanto para "Todos"
-                df_medias = votos_ciclo.groupby(['Email_Avaliado', 'Ciclo']).agg(
+                df_medias = votos_ciclo.groupby(['Email_Avaliado', 'ID_Ciclo']).agg(
                     Nome=('Nome_Avaliado', 'first'),
                     Grupo=('Grupo', 'first'),
                     Media_Pares=('Nota', 'mean'),
                     Votos_Recebidos=('Nota', 'count')
                 ).reset_index()
-                
-                df_res_filtrados = df_medias[df_medias['Email_Avaliado'].str.lower().str.strip().isin(df_alunos_esperados['Email_Pessoal'].str.lower().str.strip())]
-                
-                if df_res_filtrados.empty:
-                    st.warning("Nenhum resultado para os filtros aplicados.")
-                else:
-                    mapa_ciclo_id = dict(
-                        zip(
-                            ciclos_filtrados['Nome_Ciclo'].astype(str),
-                            ciclos_filtrados['ID_Ciclo'].astype(str).str.strip(),
-                        )
-                    )
-                    votaram_por_ciclo = {}
-                    for cid in ids_ciclo_alvo:
-                        emails = (
-                            votos_ciclo[votos_ciclo['ID_Ciclo'].astype(str).str.strip() == cid]['Email_Avaliador']
-                            .astype(str)
-                            .str.lower()
-                            .str.strip()
-                            .unique()
-                            .tolist()
-                        )
-                        votaram_por_ciclo[cid] = set(emails)
+                df_medias['Email_Avaliado'] = df_medias['Email_Avaliado'].astype(str).str.lower().str.strip()
+                df_medias['ID_Ciclo'] = df_medias['ID_Ciclo'].astype(str).str.strip()
+            else:
+                df_medias = pd.DataFrame(
+                    columns=['Email_Avaliado', 'ID_Ciclo', 'Nome', 'Grupo', 'Media_Pares', 'Votos_Recebidos']
+                )
 
-                    df_res_filtrados = df_res_filtrados.copy()
-                    df_res_filtrados['ID_Ciclo'] = df_res_filtrados['Ciclo'].map(mapa_ciclo_id)
+            votaram_por_ciclo = {}
+            for cid in ids_ciclo_alvo:
+                if votos_ciclo.empty:
+                    votaram_por_ciclo[cid] = set()
+                    continue
+                emails = (
+                    votos_ciclo[votos_ciclo['ID_Ciclo'].astype(str).str.strip() == cid]['Email_Avaliador']
+                    .astype(str)
+                    .str.lower()
+                    .str.strip()
+                    .unique()
+                    .tolist()
+                )
+                votaram_por_ciclo[cid] = set(emails)
 
-                    def _detalhar_pares(row):
-                        cid = str(row['ID_Ciclo']).strip()
-                        email = str(row['Email_Avaliado']).lower().strip()
+            if df_alunos_esperados.empty:
+                st.warning("Nenhum aluno para os filtros aplicados.")
+            else:
+                linhas_previa = []
+                for _, aluno_row in df_alunos_esperados.iterrows():
+                    email = str(aluno_row['Email_Pessoal']).lower().strip()
+                    nome = str(aluno_row.get('Nome_Completo', '')).strip()
+                    grupo = aluno_row.get('Grupo', '')
+                    for _, c_row in ciclos_alvo.iterrows():
+                        cid = str(c_row['ID_Ciclo']).strip()
+                        cnome = str(c_row['Nome_Ciclo']).strip()
+                        match = df_medias[
+                            (df_medias['Email_Avaliado'] == email)
+                            & (df_medias['ID_Ciclo'] == cid)
+                        ]
+                        if match.empty:
+                            media = 0.0
+                            votos = 0
+                        else:
+                            media = float(pd.to_numeric(match.iloc[0]['Media_Pares'], errors='coerce') or 0)
+                            votos = int(match.iloc[0]['Votos_Recebidos'] or 0)
                         realizou = email in votaram_por_ciclo.get(cid, set())
-                        nota_final = calcular_nota_pares(row['Media_Pares'], realizou)
-                        return pd.Series({
+                        nota_final = calcular_nota_pares(media, realizou)
+                        linhas_previa.append({
+                            'Nome': nome,
+                            'Email_Avaliado': email,
+                            'Ciclo': cnome,
+                            'Grupo': grupo,
+                            'Media_Pares': round(media, 1),
                             'Enviou': 'Sim' if realizou else 'Não',
                             'Nota_Final_Pares': round(nota_final, 1),
+                            'Votos_Recebidos': votos,
                         })
 
-                    df_res_filtrados[['Enviou', 'Nota_Final_Pares']] = df_res_filtrados.apply(_detalhar_pares, axis=1)
-                    df_res_filtrados['Media_Pares'] = df_res_filtrados['Media_Pares'].round(1)
-                    
-                    rel_resultados = df_res_filtrados[
-                        ['Nome', 'Ciclo', 'Grupo', 'Media_Pares', 'Enviou', 'Nota_Final_Pares']
+                df_res_filtrados = pd.DataFrame(linhas_previa)
+                rel_resultados = df_res_filtrados[
+                    ['Nome', 'Ciclo', 'Grupo', 'Media_Pares', 'Enviou', 'Nota_Final_Pares']
+                ].rename(columns={
+                    'Media_Pares': 'Nota dos pares',
+                    'Nota_Final_Pares': 'Nota final (pares)',
+                }).sort_values(['Ciclo', 'Nome'])
+                st.dataframe(rel_resultados, width="stretch")
+
+                buffer_res = io.BytesIO()
+                with pd.ExcelWriter(buffer_res, engine='openpyxl') as writer:
+                    df_res_filtrados[
+                        ['Nome', 'Email_Avaliado', 'Ciclo', 'Grupo', 'Media_Pares', 'Enviou', 'Nota_Final_Pares', 'Votos_Recebidos']
                     ].rename(columns={
                         'Media_Pares': 'Nota dos pares',
                         'Nota_Final_Pares': 'Nota final (pares)',
-                    }).sort_values(['Ciclo', 'Nome'])
-                    st.dataframe(rel_resultados, width="stretch")
-                    
-                    buffer_res = io.BytesIO()
-                    with pd.ExcelWriter(buffer_res, engine='openpyxl') as writer:
-                        df_res_filtrados[
-                            ['Nome', 'Email_Avaliado', 'Ciclo', 'Grupo', 'Media_Pares', 'Enviou', 'Nota_Final_Pares', 'Votos_Recebidos']
-                        ].rename(columns={
-                            'Media_Pares': 'Nota dos pares',
-                            'Nota_Final_Pares': 'Nota final (pares)',
-                        }).to_excel(writer, index=False, sheet_name='Resultados')
-                    st.download_button("📥 Baixar Resultados Parciais (Excel)", data=buffer_res.getvalue(), file_name=f"resultados_{ciclo_sel}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                    
+                    }).to_excel(writer, index=False, sheet_name='Resultados')
+                st.download_button(
+                    "📥 Baixar Resultados Parciais (Excel)",
+                    data=buffer_res.getvalue(),
+                    file_name=f"resultados_{ciclo_sel}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ) 
     # =========================================================
     # MÓDULO DO PROFESSOR: MODERAÇÃO DE COMENTÁRIOS
     # =========================================================
@@ -973,6 +991,16 @@ else:
     # =========================================================
     # NOVAS TELAS: CONTROLE DE FREQUÊNCIA (PROFESSOR & SECRETARIA)
     # =========================================================
+    elif menu == ROTA_FREQ_PROGRAMACAO and (
+        perfil == "Secretaria" or perfil == "Professor"
+    ):
+        prof_calendario.render(
+            aluno,
+            pode_editar=bool(
+                usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador")
+            ),
+        )
+
     elif menu == ROTA_FREQ_CONTROLE and (
         perfil == "Secretaria" or (perfil == "Professor" and professor_e_orientador(aluno))
     ):
@@ -1039,6 +1067,12 @@ else:
     # =========================================================
     elif menu == ROTA_LANCAR_BANCA and perfil == "Professor":
         prof_avaliacao_grupo.render(aluno)
+
+    elif menu == ROTA_ANOTACOES_DAILY and perfil == "Professor" and (
+        professor_e_orientador(aluno)
+        or (usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+    ):
+        prof_anotacoes_daily.render_pagina(aluno)
 
     elif menu == ROTA_LIBERAR_NOTAS and perfil == "Professor" and pode_gerenciar_liberacao_notas(aluno):
         prof_liberacao_notas.render(aluno)

@@ -303,6 +303,30 @@ def obter_media_avaliacao_grupo(
     }
 
 
+def obter_media_avaliacao_grupo_aluno(
+    id_ciclo: str,
+    grupo: str,
+    sala: str = "",
+    id_disciplina: str | None = None,
+) -> dict | None:
+    """Nota do grupo liberada ao aluno (mesma regra da tela Avaliação do grupo).
+
+    Libera se houver conferência do coordenador, ou 2+ avaliações da banca,
+    ou o ciclo já estiver inativo (fora da janela Data início/Data fim das pares).
+    """
+    from domain.ciclos import ciclo_inativo
+
+    oficial = obter_media_avaliacao_grupo(id_ciclo, grupo, sala, id_disciplina)
+    if not oficial:
+        return None
+    if oficial.get("origem") == "conferencia":
+        return oficial
+    n = int(oficial.get("n_avaliadores") or 0)
+    if n >= 2 or ciclo_inativo(id_ciclo):
+        return oficial
+    return None
+
+
 def obter_nota_orientador(id_ciclo: str, email_aluno: str) -> float | None:
     try:
         df = ler_aba("Avaliacao_Orientador")

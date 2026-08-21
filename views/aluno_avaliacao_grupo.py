@@ -8,9 +8,9 @@ from data.sheets import ler_aba
 from domain.avaliacoes import (
     formatar_nota_entrega,
     listar_comentarios_banca_grupo,
-    obter_media_avaliacao_grupo,
+    obter_media_avaliacao_grupo_aluno,
 )
-from domain.ciclos import ciclo_inativo, obter_disciplina_ativa, ordenar_ciclos
+from domain.ciclos import obter_disciplina_ativa, ordenar_ciclos
 from utils.logs import registrar_log_acesso
 
 
@@ -28,16 +28,12 @@ def _mapa_ciclos(id_disciplina: str) -> dict[str, tuple[int, str]]:
     return mapa
 
 
-def _mostrar_media_banca(itens_banca: list[dict], id_ciclo: str) -> bool:
-    """Média da banca só com 2+ avaliações de professores ou ciclo encerrado."""
-    return len(itens_banca) >= 2 or ciclo_inativo(id_ciclo)
-
-
 def render(usuario: dict):
     st.header("Avaliação do grupo")
     st.caption(
-        "Comentários da banca. A nota do grupo é a média dos professores, "
-        "salvo quando a coordenação registra uma nota de conferência (que substitui a média)."
+        "Comentários da banca. A nota do grupo (média ou conferência) só aparece "
+        "com 2+ avaliações de professores, após o fim da janela de pares do ciclo, "
+        "ou se a coordenação registrar nota de conferência."
     )
     registrar_log_acesso(usuario["email"], usuario["nome"], "Visualizou Avaliação do Grupo")
 
@@ -76,16 +72,15 @@ def render(usuario: dict):
 
     for id_ciclo in ciclos_ordenados:
         itens = sorted(por_ciclo[id_ciclo], key=lambda x: x["nome_avaliador"].lower())
-        itens_banca = [i for i in itens if not i.get("eh_conferencia")]
         nome_ciclo = ordem.get(id_ciclo, (0, itens[0]["nome_ciclo"] or f"Ciclo {id_ciclo}"))[1]
-        oficial = obter_media_avaliacao_grupo(id_ciclo, grupo, sala, str(id_disc))
+        oficial = obter_media_avaliacao_grupo_aluno(id_ciclo, grupo, sala, str(id_disc))
 
         if oficial and oficial.get("origem") == "conferencia":
             titulo = (
                 f"{nome_ciclo} — nota da coordenação "
                 f"{formatar_nota_entrega(oficial['nota_total'])}"
             )
-        elif oficial and _mostrar_media_banca(itens_banca, id_ciclo):
+        elif oficial:
             titulo = (
                 f"{nome_ciclo} — média da banca "
                 f"{formatar_nota_entrega(oficial['nota_total'])}"
@@ -98,10 +93,10 @@ def render(usuario: dict):
                 st.caption(
                     "A coordenação registrou uma nota de conferência que substitui a média da banca."
                 )
-            elif not _mostrar_media_banca(itens_banca, id_ciclo):
+            elif not oficial:
                 st.caption(
                     "A média da banca será exibida quando houver pelo menos duas "
-                    "avaliações de professores ou após o encerramento do ciclo."
+                    "avaliações de professores ou após o encerramento da janela de pares do ciclo."
                 )
             for item in itens:
                 with st.container(border=True):

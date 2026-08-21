@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      function post(type, data) {
+        const payload = Object.assign({ isStreamlitMessage: true, type: type }, data || {});
+        window.parent.postMessage(payload, "*");
+      }
+
+      function setValue(valor) {
+        post("streamlit:setComponentValue", { value: valor });
+      }
+
+      function setHeight(height) {
+        post("streamlit:setFrameHeight", { height: height });
+      }
+
+      function ready() {
+        post("streamlit:componentReady", { apiVersion: 1 });
+      }
+
+      function lerHash() {
+        try {
+          return window.top.location.hash || "";
+        } catch (e1) {
+          try {
+            return window.parent.location.hash || "";
+          } catch (e2) {
+            return "";
+          }
+        }
+      }
+
+      function promoverHashParaQuery() {
+        const hash = lerHash();
+        if (!hash || hash.indexOf("access_token") === -1) {
+          return false;
+        }
+        try {
+          const hp = new URLSearchParams(hash.substring(1));
+          const access = hp.get("access_token");
+          if (!access) return false;
+          const loc = window.top.location;
+          const url = new URL(loc.href);
+          url.hash = "";
+          url.searchParams.set("recuperar", "1");
+          url.searchParams.set("access_token", access);
+          url.searchParams.set("refresh_token", hp.get("refresh_token") || "");
+          url.searchParams.set("type", hp.get("type") || "recovery");
+          loc.replace(url.toString());
+          return true;
+        } catch (e) {
+          return false;
+        }
+      }
+
+      // Redireciona na hora — sem esperar handshake do Streamlit (evita pisca-pisca).
+      if (promoverHashParaQuery()) {
+        // A página será recarregada com tokens na query.
+      } else {
+        function processar() {
+          setHeight(0);
+          if (promoverHashParaQuery()) {
+            setValue("redirecting");
+            return;
+          }
+          setValue(lerHash() || "");
+        }
+        ready();
+        window.addEventListener("message", function (event) {
+          if (event.data && event.data.type === "streamlit:render") {
+            processar();
+          }
+        });
+        setTimeout(processar, 50);
+      }
+    </script>
+  </head>
+  <body></body>
+</html>

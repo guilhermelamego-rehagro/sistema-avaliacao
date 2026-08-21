@@ -9,7 +9,10 @@ from auth.supabase_auth import (
     SENHA_MINIMA,
     fazer_login,
     fazer_logout,
+    processar_retorno_recuperacao,
     professor_e_orientador,
+    recuperacao_senha_habilitada,
+    solicitar_recuperacao_senha,
     trocar_senha,
     usuario_e_coordenador,
     validar_senha,
@@ -110,10 +113,26 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Interface Lateral
-st.sidebar.image("logo.png", width=200)
-
+# Durante validação do link de recovery, não monta o login (evita pisca-pisca).
 if "usuario_logado" not in st.session_state:
     st.session_state["usuario_logado"] = None
+if "tela_auth" not in st.session_state:
+    st.session_state["tela_auth"] = "login"
+
+status_recuperacao = processar_retorno_recuperacao()
+if status_recuperacao == "_pending":
+    st.sidebar.image("logo.png", width=200)
+    _, centro_espera, _ = st.columns([1, 1.2, 1])
+    with centro_espera:
+        st.title("Redefinição de senha")
+        st.markdown("Validando seu link. Aguarde um momento…")
+        # Mantém o componente montado (ler_fragmento) sem alternar outros widgets.
+    st.stop()
+elif status_recuperacao:
+    st.session_state["tela_auth"] = "recuperar"
+    st.session_state["_erro_recuperacao_link"] = status_recuperacao
+
+st.sidebar.image("logo.png", width=200)
 
 # ==========================================
 # TELA DE LOGIN (SUPABASE)
@@ -122,44 +141,131 @@ if not st.session_state["usuario_logado"]:
     _, centro_login, _ = st.columns([1, 1.2, 1])
     with centro_login:
         st.title("Bem-vindo ao Portal de Avaliações")
-        st.caption("Acesse com seu e-mail institucional e senha.")
 
-        with st.form("form_login"):
-            email_input = st.text_input("E-mail:")
-            senha_input = st.text_input("Senha:", type="password")
-            entrar = st.form_submit_button("Entrar", type="primary", width="stretch")
+        if st.session_state.get("_erro_recuperacao_link"):
+            st.error(st.session_state.pop("_erro_recuperacao_link"))
 
-    if entrar:
-        if not email_input or not senha_input:
-            st.error("Informe e-mail e senha.")
-        else:
-            with st.spinner("Autenticando..."):
-                usuario, erro = fazer_login(email_input, senha_input)
-            if erro:
-                st.error(erro)
-            else:
-                registrar_log(usuario["email"], usuario["nome"], f"Acessou como {usuario['perfil']}")
-                st.session_state["escolha_menu"] = rota_padrao(usuario, usuario["perfil"])
-                st.session_state["modo_coordenador"] = False
+        if (
+            recuperacao_senha_habilitada()
+            and st.session_state.get("tela_auth") == "recuperar"
+        ):
+            st.caption(
+                "Informe seu e-mail institucional para receber o link de redefinição."
+            )
+            senha_tmp_mostrada = st.session_state.get("_recup_senha_tmp")
+            with st.form("form_recuperar_senha"):
+                email_recup = st.text_input("E-mail:")
+                enviar = st.form_submit_button(
+                    "Enviar link",
+                    type="primary",
+                    width="stretch",
+                    disabled=bool(senha_tmp_mostrada),
+                )
+            if st.button("Voltar ao login", width="stretch"):
+                st.session_state["tela_auth"] = "login"
+                st.session_state.pop("_recup_senha_tmp", None)
                 st.rerun()
+            if enviar and not senha_tmp_mostrada:
+                resultado = solicitar_recuperacao_senha(email_recup)
+                if not isinstance(resultado, tuple) or len(resultado) != 2:
+                    st.error(
+                        "Não foi possível processar a recuperação. "
+                        "Recarregue a página (ou reinicie o app) e tente de novo."
+                    )
+                else:
+                    tipo_recup, msg_recup = resultado
+                    if tipo_recup == "erro":
+                        st.error(
+                            msg_recup or "Não foi possível solicitar a redefinição."
+                        )
+                    elif tipo_recup == "senha_temporaria":
+                        st.session_state["_recup_senha_tmp"] = (
+                            msg_recup or "rehagro2026"
+                        ).strip()
+                        st.rerun()
+                    else:
+                        st.success(
+                            "Se o e-mail estiver cadastrado, enviamos um link para "
+                            "redefinir a senha. Verifique a caixa de entrada e o spam."
+                        )
+
+            senha_tmp = st.session_state.get("_recup_senha_tmp")
+            if senha_tmp:
+                texto = (
+                    "Você ainda não definiu uma senha própria. "
+                    f"Entre com a senha temporária **{senha_tmp}** e, "
+                    "no primeiro acesso, o sistema pedirá que você escolha "
+                    "uma senha nova."
+                )
+                st.markdown(
+                    f'<p style="text-align:center;color:#000000;'
+                    f'font-size:1.15rem;font-weight:700;margin:0.4rem 0 0.8rem 0;">'
+                    f"{senha_tmp}</p>",
+                    unsafe_allow_html=True,
+                )
+                st.warning(texto)
+        else:
+            st.caption("Acesse com seu e-mail institucional e senha.")
+            with st.form("form_login"):
+                email_input = st.text_input("E-mail:")
+                senha_input = st.text_input("Senha:", type="password")
+                entrar = st.form_submit_button(
+                    "Entrar", type="primary", width="stretch"
+                )
+
+            if recuperacao_senha_habilitada():
+                if st.button("Esqueci minha senha", width="stretch"):
+                    st.session_state["tela_auth"] = "recuperar"
+                    st.rerun()
+
+            if entrar:
+                if not email_input or not senha_input:
+                    st.error("Informe e-mail e senha.")
+                else:
+                    with st.spinner("Autenticando..."):
+                        usuario, erro = fazer_login(email_input, senha_input)
+                    if erro:
+                        st.error(erro)
+                    else:
+                        registrar_log(
+                            usuario["email"],
+                            usuario["nome"],
+                            f"Acessou como {usuario['perfil']}",
+                        )
+                        st.session_state["escolha_menu"] = rota_padrao(
+                            usuario, usuario["perfil"]
+                        )
+                        st.session_state["modo_coordenador"] = False
+                        st.rerun()
 
 # ==========================================
-# TROCA OBRIGATÓRIA DE SENHA (1º ACESSO)
+# TROCA OBRIGATÓRIA / RECUPERAÇÃO DE SENHA
 # ==========================================
-elif st.session_state["usuario_logado"].get("deve_trocar_senha"):
+elif st.session_state["usuario_logado"].get("deve_trocar_senha") or st.session_state.get(
+    "_recuperacao_senha"
+):
     usuario = st.session_state["usuario_logado"]
+    recuperando = bool(st.session_state.get("_recuperacao_senha"))
     _, centro_senha, _ = st.columns([1, 1.2, 1])
     with centro_senha:
         st.title("Defina sua nova senha")
-        st.info(
-            f"Olá, **{usuario['nome']}**! Por segurança, troque a senha temporária "
-            f"antes de continuar. Mínimo de {SENHA_MINIMA} caracteres."
-        )
+        if recuperando:
+            st.info(
+                f"Olá, **{usuario['nome']}**! Escolha uma nova senha para continuar. "
+                f"Mínimo de {SENHA_MINIMA} caracteres."
+            )
+        else:
+            st.info(
+                f"Olá, **{usuario['nome']}**! Por segurança, troque a senha temporária "
+                f"antes de continuar. Mínimo de {SENHA_MINIMA} caracteres."
+            )
 
         with st.form("form_trocar_senha"):
             nova_senha = st.text_input("Nova senha:", type="password")
             confirmar = st.text_input("Confirmar nova senha:", type="password")
-            salvar = st.form_submit_button("Salvar e continuar", type="primary", width="stretch")
+            salvar = st.form_submit_button(
+                "Salvar e continuar", type="primary", width="stretch"
+            )
 
     if salvar:
         if nova_senha != confirmar:
@@ -173,7 +279,12 @@ elif st.session_state["usuario_logado"].get("deve_trocar_senha"):
                 if erro_troca:
                     st.error(erro_troca)
                 else:
-                    registrar_log(usuario["email"], usuario["nome"], "Trocou senha no primeiro acesso")
+                    acao = (
+                        "Redefiniu senha por recuperação"
+                        if recuperando
+                        else "Trocou senha no primeiro acesso"
+                    )
+                    registrar_log(usuario["email"], usuario["nome"], acao)
                     st.success("Senha atualizada com sucesso!")
                     st.rerun()
 

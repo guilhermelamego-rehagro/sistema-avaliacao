@@ -52,15 +52,30 @@ def cliente_gspread(secrets: dict):
     return gspread.authorize(creds)
 
 
-def com_retry(func, *args, max_tentativas: int = 5, **kwargs):
+def _status_api(exc: APIError):
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    for attr in ("status_code", "status", "code"):
+        valor = getattr(resp, attr, None)
+        if valor is not None:
+            try:
+                return int(valor)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def com_retry(func, *args, max_tentativas: int = 10, **kwargs):
+    retriaveis = {429, 500, 502, 503, 504}
     for tentativa in range(max_tentativas):
         try:
             return func(*args, **kwargs)
         except APIError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status == 429 and tentativa < max_tentativas - 1:
-                espera = 2**tentativa + 1
-                print(f"  Limite da API (429). Aguardando {espera}s...")
+            status = _status_api(exc)
+            if status in retriaveis and tentativa < max_tentativas - 1:
+                espera = min(2**tentativa + 5, 90)
+                print(f"  Limite/falha da API ({status}). Aguardando {espera}s...")
                 time.sleep(espera)
                 continue
             raise
@@ -110,7 +125,12 @@ def sincronizar(origem, destino, dry_run: bool) -> None:
         return
 
     print("\nCriando aba temporária no destino...")
-    placeholder = com_retry(destino.add_worksheet, title=PLACEHOLDER, rows=1, cols=1)
+    existentes = {ws.title: ws for ws in destino.worksheets()}
+    if PLACEHOLDER in existentes:
+        placeholder = existentes[PLACEHOLDER]
+        print(f"  reutilizando {PLACEHOLDER}")
+    else:
+        placeholder = com_retry(destino.add_worksheet, title=PLACEHOLDER, rows=1, cols=1)
 
     print("Removendo abas antigas do teste...")
     for aba in destino.worksheets():
@@ -118,7 +138,7 @@ def sincronizar(origem, destino, dry_run: bool) -> None:
             continue
         print(f"  apagando {aba.title}")
         com_retry(destino.del_worksheet, aba)
-        time.sleep(0.4)
+        time.sleep(1.0)
 
     print("Copiando abas de produção...")
     for aba in abas_origem:
@@ -126,10 +146,11 @@ def sincronizar(origem, destino, dry_run: bool) -> None:
         props = com_retry(aba.copy_to, destino.id)
         titulo_copiado = (props or {}).get("title") or f"Cópia de {aba.title}"
         if titulo_copiado != aba.title:
+            time.sleep(1.0)
             copiada = com_retry(destino.worksheet, titulo_copiado)
             print(f"    {titulo_copiado} -> {aba.title}")
             com_retry(copiada.update_title, aba.title)
-        time.sleep(0.6)
+        time.sleep(1.5)
 
     print("Removendo aba temporária...")
     com_retry(destino.del_worksheet, placeholder)

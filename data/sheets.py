@@ -74,15 +74,30 @@ def _normalizar_colunas_texto(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _status_api_error(exc: APIError):
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return None
+    for attr in ("status_code", "status", "code"):
+        valor = getattr(resp, attr, None)
+        if valor is not None:
+            try:
+                return int(valor)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _requisitar_com_retry(func, *args, max_tentativas: int = 6, **kwargs):
-    """Repete leituras da API em caso de limite temporário (HTTP 429)."""
+    """Repete leituras da API em caso de limite ou falha temporária do Google Sheets."""
+    retriaveis = {429, 500, 502, 503, 504}
     for tentativa in range(max_tentativas):
         try:
             return func(*args, **kwargs)
         except APIError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status == 429 and tentativa < max_tentativas - 1:
-                time.sleep(8 * (tentativa + 1))
+            status = _status_api_error(exc)
+            if status in retriaveis and tentativa < max_tentativas - 1:
+                time.sleep(min(8 * (tentativa + 1), 30))
                 continue
             raise
 
@@ -129,7 +144,7 @@ def conectar_planilha():
     )
     cliente = gspread.authorize(credenciais)
     chave = "id_producao" if _ambiente_planilha() == "producao" else "id_teste"
-    return cliente.open_by_key(st.secrets["planilhas"][chave])
+    return _requisitar_com_retry(cliente.open_by_key, st.secrets["planilhas"][chave])
 
 
 @st.cache_resource(ttl=600)
@@ -138,7 +153,9 @@ def conectar_planilha_frequencia():
         st.secrets["gcp_service_account"], ESCOPO
     )
     cliente = gspread.authorize(credenciais)
-    return cliente.open_by_key(st.secrets["planilhas"]["id_frequencia"])
+    return _requisitar_com_retry(
+        cliente.open_by_key, st.secrets["planilhas"]["id_frequencia"]
+    )
 
 
 @st.cache_resource(ttl=600)
@@ -202,11 +219,26 @@ def _sincronizar_abas_novas():
 
 
 def preparar_ambiente_planilhas():
-    """Uma vez por sessão: garante abas novas. Não bloqueia leitura de abas legadas."""
+    """Uma vez por sessão: garante abas novas. Não bloqueia a área logada se a API falhar."""
     if st.session_state.get("_planilhas_prontas"):
         return
-    _sincronizar_abas_novas()
-    st.session_state["_planilhas_prontas"] = True
+    try:
+        _sincronizar_abas_novas()
+        st.session_state["_planilhas_prontas"] = True
+        st.session_state.pop("_planilhas_aviso", None)
+    except (APIError, GSpreadException, OSError, TimeoutError):
+        # Quota/rede transitória do Google Sheets — não derruba o login.
+        for limpar in (
+            conectar_planilha,
+            conectar_planilha_frequencia,
+            _titulos_abas_avaliacao,
+            _titulos_abas_frequencia,
+        ):
+            try:
+                limpar.clear()
+            except Exception:
+                pass
+        st.session_state["_planilhas_aviso"] = True
 
 
 def garantir_aba_avaliacao(nome_aba: str):

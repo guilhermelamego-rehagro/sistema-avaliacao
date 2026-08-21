@@ -184,6 +184,12 @@ else:
     aluno = st.session_state["usuario_logado"]
     perfil = aluno.get("perfil", "Aluno")
     preparar_ambiente_planilhas()
+    if st.session_state.get("_planilhas_aviso"):
+        st.warning(
+            "A sincronização com as planilhas falhou temporariamente (Google Sheets). "
+            "Recarregue a página se alguma tela não abrir."
+        )
+        st.session_state.pop("_planilhas_aviso", None)
 
     st.sidebar.write(f"**{aluno['nome']}**")
     st.sidebar.caption(f"{aluno['email']} · {perfil}")

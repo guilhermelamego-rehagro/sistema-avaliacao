@@ -320,7 +320,25 @@ def renderizar_sidebar(usuario: dict, perfil: str) -> str:
                         st.session_state["escolha_menu"] = item.rota
                         st.rerun()
 
+    if perfil == "Aluno":
+        _render_link_plataforma_aluno(usuario)
+
     return rota_atual
+
+
+def _render_link_plataforma_aluno(usuario: dict) -> None:
+    from domain.plataforma import link_plataforma_disciplina_ativa
+
+    link = link_plataforma_disciplina_ativa(usuario.get("email", ""))
+    if not link:
+        return
+    st.sidebar.divider()
+    st.sidebar.link_button(
+        "Disciplina na plataforma",
+        link,
+        help="Abrir o curso desta disciplina no Canvas",
+        width="stretch",
+    )
 
 
 def ir_para(rota: str):

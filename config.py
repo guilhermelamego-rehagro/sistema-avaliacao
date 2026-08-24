@@ -163,6 +163,7 @@ ABAS_AVALIACAO = {
         "Data_Prevista_Inicio",
         "Data_Prevista_Fim",
         "Encontro_Presencial",
+        "Link_Plataforma",
         "Observacao",
     ],
     "Oferta_Turmas": [

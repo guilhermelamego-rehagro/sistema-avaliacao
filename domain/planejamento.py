@@ -47,6 +47,7 @@ COLUNAS_OFERTAS = [
     "Data_Prevista_Inicio",
     "Data_Prevista_Fim",
     "Encontro_Presencial",
+    "Link_Plataforma",
     "Observacao",
 ]
 COLUNAS_OFERTA_TURMAS = ["ID_Oferta", "ID_Turma"]
@@ -157,6 +158,51 @@ def parse_id_trimestre(valor) -> tuple[str, str]:
         ano, num = texto.split("-", 1)
         return str(_int_ou_vazio(ano) or ""), str(_int_ou_vazio(num) or "")
     return "", ""
+
+
+_RE_NOME_TRIMESTRE = re.compile(r"^\d{4}/[1-4]$")
+_RE_ID_TRIMESTRE = re.compile(r"^\d{4}-[1-4]$")
+
+
+def _parece_serial_planilha(valor) -> bool:
+    """Número típico de data serializada no Sheets/Excel (ex.: 46082)."""
+    texto = str(valor or "").strip()
+    if not texto or texto.lower() in {"nan", "none"}:
+        return False
+    try:
+        n = float(texto.replace(",", "."))
+    except ValueError:
+        return False
+    return n == int(n) and 40000 <= int(n) <= 60000
+
+
+def _nome_trimestre_valido(nome) -> bool:
+    return bool(_RE_NOME_TRIMESTRE.match(str(nome or "").strip()))
+
+
+def _id_trimestre_valido(id_tri) -> bool:
+    texto = normalizar_id(id_tri).replace("/", "-")
+    return bool(_RE_ID_TRIMESTRE.match(texto))
+
+
+def _corrigir_id_nome_trimestre(
+    ano, numero, id_atual="", nome_atual=""
+) -> tuple[str, str]:
+    ano_i = _int_ou_vazio(ano)
+    num_i = _int_ou_vazio(numero)
+    id_tri = normalizar_id(id_atual).replace("/", "-")
+    nome = str(nome_atual or "").strip()
+    if ano_i and num_i:
+        if not _id_trimestre_valido(id_tri) or _parece_serial_planilha(id_tri):
+            id_tri = codigo_trimestre(ano_i, num_i)
+        if not _nome_trimestre_valido(nome) or _parece_serial_planilha(nome):
+            nome = rotulo_trimestre(ano_i, num_i)
+    return id_tri, nome
+
+
+def normalizar_id_trimestre(ano, numero, id_atual="") -> str:
+    id_tri, _ = _corrigir_id_nome_trimestre(ano, numero, id_atual, "")
+    return id_tri
 
 
 def proximo_id(existentes, prefixo: str) -> str:
@@ -909,10 +955,16 @@ def carregar_trimestres() -> pd.DataFrame:
     if not df.empty:
         df = df.sort_values(["Ano", "Numero"], na_position="last")
     for idx, row in df.iterrows():
-        if not normalizar_id(row.get("ID_Trimestre", "")):
-            df.at[idx, "ID_Trimestre"] = codigo_trimestre(row.get("Ano"), row.get("Numero"))
-        if not str(row.get("Nome", "")).strip():
-            df.at[idx, "Nome"] = rotulo_trimestre(row.get("Ano"), row.get("Numero"))
+        id_tri, nome = _corrigir_id_nome_trimestre(
+            row.get("Ano"),
+            row.get("Numero"),
+            row.get("ID_Trimestre"),
+            row.get("Nome"),
+        )
+        if id_tri:
+            df.at[idx, "ID_Trimestre"] = id_tri
+        if nome:
+            df.at[idx, "Nome"] = nome
     return df
 
 
@@ -940,9 +992,9 @@ def salvar_trimestres(df: pd.DataFrame) -> str | None:
         num = row.get("Numero")
         if not ano or str(num) not in NUMEROS_TRIMESTRE:
             return "Cada trimestre precisa de ano e número de 1 a 4."
-        df.at[idx, "ID_Trimestre"] = codigo_trimestre(ano, num)
-        nome = str(row.get("Nome", "")).strip()
-        df.at[idx, "Nome"] = nome or rotulo_trimestre(ano, num)
+        id_tri, nome = _corrigir_id_nome_trimestre(ano, num, row.get("ID_Trimestre"), row.get("Nome"))
+        df.at[idx, "ID_Trimestre"] = id_tri
+        df.at[idx, "Nome"] = nome
         df.at[idx, "Status"] = _status_lista(row.get("Status"), STATUS_TRIMESTRE, "Planejado")
         df.at[idx, "Data_Inicio"] = _fmt_data(row.get("Data_Inicio"))
         df.at[idx, "Data_Fim"] = _fmt_data(row.get("Data_Fim"))
@@ -993,6 +1045,15 @@ def carregar_ofertas() -> pd.DataFrame:
     df["ID_Trimestre"] = df["ID_Trimestre"].map(lambda v: normalizar_id(v).replace("/", "-"))
     df["Ano"] = df["Ano"].map(_int_ou_vazio)
     df["Trimestre"] = df["Trimestre"].map(lambda v: str(_int_ou_vazio(v) or "").strip())
+    for idx, row in df.iterrows():
+        id_tri, _ = _corrigir_id_nome_trimestre(
+            row.get("Ano"),
+            row.get("Trimestre"),
+            row.get("ID_Trimestre"),
+            "",
+        )
+        if id_tri:
+            df.at[idx, "ID_Trimestre"] = id_tri
     sem_tri = df["ID_Trimestre"].eq("") & df["Ano"].astype(str).ne("") & df["Trimestre"].ne("")
     df.loc[sem_tri, "ID_Trimestre"] = [
         codigo_trimestre(a, t) for a, t in zip(df.loc[sem_tri, "Ano"], df.loc[sem_tri, "Trimestre"])
@@ -1000,6 +1061,7 @@ def carregar_ofertas() -> pd.DataFrame:
     df["Tipo"] = df["Tipo"].map(lambda v: _status_lista(v, TIPO_OFERTA, "Regular"))
     df["Status"] = df["Status"].map(lambda v: _status_lista(v, STATUS_OFERTA, "Planejada"))
     df["Encontro_Presencial"] = df["Encontro_Presencial"].map(_encontro)
+    df["Link_Plataforma"] = df["Link_Plataforma"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df["Observacao"] = df["Observacao"].astype(str).str.strip().replace({"nan": "", "None": ""})
     df["Data_Prevista_Inicio"] = _datas_para_editor(df["Data_Prevista_Inicio"])
     df["Data_Prevista_Fim"] = _datas_para_editor(df["Data_Prevista_Fim"])
@@ -1121,6 +1183,7 @@ def salvar_oferta(linha: dict, turmas: list[str]) -> str | None:
         "Data_Prevista_Inicio": _fmt_data(data_ini),
         "Data_Prevista_Fim": _fmt_data(data_fim),
         "Encontro_Presencial": _encontro(linha.get("Encontro_Presencial")),
+        "Link_Plataforma": str(linha.get("Link_Plataforma", "")).strip(),
         "Observacao": str(linha.get("Observacao", "")).strip(),
     }
     resto = ofertas[ofertas["ID_Oferta"].map(normalizar_id) != id_oferta]

@@ -3,6 +3,7 @@
 import streamlit as st
 
 from domain.ciclos import obter_disciplina_ativa
+from domain.plataforma import link_plataforma_disciplina_ativa
 from domain.status_inicio_aluno import ResumoTarefa, status_avaliacao_curso, status_avaliacao_pares
 from navigation import ROTA_CURSO_AVALIAR, ROTA_PARES_AVALIAR, ir_para
 from views.prof_calendario import render as render_calendario
@@ -41,8 +42,21 @@ def render(usuario: dict):
     st.caption(f"Olá, **{usuario['nome']}**. Confira a programação e suas avaliações pendentes.")
 
     id_disc, nome_disc = obter_disciplina_ativa()
+    link_plataforma = link_plataforma_disciplina_ativa(usuario["email"])
     if nome_disc:
-        st.info(f"Disciplina ativa: **{nome_disc}**")
+        if link_plataforma:
+            col_info, col_link = st.columns([4, 1])
+            with col_info:
+                st.info(f"Disciplina ativa: **{nome_disc}**")
+            with col_link:
+                st.link_button(
+                    "Disciplina na plataforma",
+                    link_plataforma,
+                    help="Abrir o curso no Canvas",
+                    width="stretch",
+                )
+        else:
+            st.info(f"Disciplina ativa: **{nome_disc}**")
     else:
         st.warning("Nenhuma disciplina ativa no momento.")
 

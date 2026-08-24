@@ -39,6 +39,7 @@ from domain.planejamento import (
     itens_da_matriz,
     nome_disciplina,
     normalizar_codigo_turma,
+    normalizar_id_trimestre,
     parse_id_trimestre,
     proximo_id,
     remover_carrossel,
@@ -346,25 +347,44 @@ def _render_matrizes(usuario: dict, discs: pd.DataFrame):
                     st.rerun()
 
 
+def _rotulo_trimestre_oferta(row) -> str:
+    """Rótulo legível do trimestre (sem repetir código interno e nome)."""
+    id_tri = normalizar_id(row.get("ID_Trimestre", "")).replace("/", "-")
+    ano, num = parse_id_trimestre(id_tri)
+    if not (ano and num):
+        ano = str(row.get("Ano", "")).strip()
+        num = str(row.get("Numero", "")).strip()
+    titulo = rotulo_trimestre(ano, num) if ano and num else str(row.get("Nome", "")).strip()
+    status = str(row.get("Status", "")).strip()
+    ini = row.get("Data_Inicio")
+    fim = row.get("Data_Fim")
+    extra = []
+    if ini:
+        extra.append(pd.Timestamp(ini).strftime("%d/%m/%Y") if not isinstance(ini, str) else str(ini))
+    if fim:
+        extra.append(pd.Timestamp(fim).strftime("%d/%m/%Y") if not isinstance(fim, str) else str(fim))
+    rotulo = titulo
+    if status:
+        rotulo = f"{rotulo} · {status}"
+    if extra:
+        rotulo = f"{rotulo} ({' a '.join(extra)})"
+    return rotulo
+
+
 def _opcoes_trimestre(trimestres: pd.DataFrame) -> list[str]:
-    opcoes = []
+    return [_rotulo_trimestre_oferta(row) for _, row in trimestres.iterrows()]
+
+
+def _id_trimestre_de_rotulo(rotulo: str, trimestres: pd.DataFrame) -> str:
+    alvo = str(rotulo or "").strip()
     for _, row in trimestres.iterrows():
-        nome = str(row.get("Nome", "")).strip() or rotulo_trimestre(row.get("Ano"), row.get("Numero"))
-        status = str(row.get("Status", "")).strip()
-        ini = row.get("Data_Inicio")
-        fim = row.get("Data_Fim")
-        extra = []
-        if ini:
-            extra.append(pd.Timestamp(ini).strftime("%d/%m/%Y") if not isinstance(ini, str) else str(ini))
-        if fim:
-            extra.append(pd.Timestamp(fim).strftime("%d/%m/%Y") if not isinstance(fim, str) else str(fim))
-        rotulo = nome
-        if status:
-            rotulo = f"{rotulo} · {status}"
-        if extra:
-            rotulo = f"{rotulo} ({' a '.join(extra)})"
-        opcoes.append(f"{row['ID_Trimestre']} — {rotulo}")
-    return opcoes
+        if _rotulo_trimestre_oferta(row) == alvo:
+            return normalizar_id(row["ID_Trimestre"]).replace("/", "-")
+    prefixo = alvo.split(" · ", 1)[0].strip()
+    if "/" in prefixo:
+        ano, num = prefixo.split("/", 1)
+        return codigo_trimestre(ano, num)
+    return _id_de_rotulo(alvo).replace("/", "-")
 
 
 def _render_trimestres(usuario: dict):
@@ -882,9 +902,11 @@ def _render_ofertas(usuario: dict, discs: pd.DataFrame):
         id_disc = normalizar_id(row.get("ID_Disciplina", ""))
         status = str(row.get("Status", "Planejada"))
         tipo = str(row.get("Tipo", "Regular"))
-        id_tri = normalizar_id(row.get("ID_Trimestre", "")).replace("/", "-")
-        if not id_tri:
-            id_tri = codigo_trimestre(row.get("Ano"), row.get("Trimestre"))
+        id_tri = normalizar_id_trimestre(
+            row.get("Ano"),
+            row.get("Trimestre"),
+            row.get("ID_Trimestre"),
+        )
         rotulo_tri = rotulo_trimestre(*parse_id_trimestre(id_tri)) if id_tri else ""
         nome_disc = nome_disciplina(discs, id_disc) if id_disc else "Nova oferta"
         n_turmas = len(turmas_da_oferta(id_atual, vinculos)) if id_atual else 0
@@ -897,7 +919,7 @@ def _render_ofertas(usuario: dict, discs: pd.DataFrame):
             _seed(f"ofe_tipo_{k}", tipo if tipo in TIPO_OFERTA else "Regular")
             _seed(f"ofe_status_{k}", status if status in STATUS_OFERTA else "Planejada")
             rotulo_tri_padrao = next(
-                (o for o in opcoes_tri if _id_de_rotulo(o).replace("/", "-") == id_tri),
+                (o for o in opcoes_tri if _id_trimestre_de_rotulo(o, trimestres) == id_tri),
                 opcoes_tri[0] if opcoes_tri else "",
             )
             _seed_opcao(f"ofe_tri_{k}", rotulo_tri_padrao, opcoes_tri)
@@ -915,7 +937,7 @@ def _render_ofertas(usuario: dict, discs: pd.DataFrame):
             b.selectbox("Tipo", TIPO_OFERTA, key=f"ofe_tipo_{k}")
             c.selectbox("Status", STATUS_OFERTA, key=f"ofe_status_{k}")
             st.selectbox("Trimestre acadêmico", opcoes_tri, key=f"ofe_tri_{k}")
-            id_tri_sel = _id_de_rotulo(st.session_state.get(f"ofe_tri_{k}", "")).replace("/", "-")
+            id_tri_sel = _id_trimestre_de_rotulo(st.session_state.get(f"ofe_tri_{k}", ""), trimestres)
             tri_sel = trimestre_por_id(id_tri_sel, trimestres)
             if tri_sel is not None:
                 ini_txt = ""
@@ -955,6 +977,16 @@ def _render_ofertas(usuario: dict, discs: pd.DataFrame):
                 ENCONTRO_OPCOES,
                 key=f"ofe_enc_{k}",
                 help=f"Sugestão desta volta: {sugestao}. A data real do encontro continua no cadastro da disciplina/ciclos.",
+            )
+            _seed(
+                f"ofe_link_{k}",
+                str(row.get("Link_Plataforma", "")).replace("nan", "").replace("None", ""),
+            )
+            st.text_input(
+                "Link da disciplina na plataforma (Canvas)",
+                key=f"ofe_link_{k}",
+                placeholder="https://rehagro.instructure.com/courses/3283",
+                help="URL do curso no Canvas desta oferta. Os alunos verão o atalho no menu.",
             )
             st.text_input("Observação", key=f"ofe_obs_{k}")
 
@@ -1007,6 +1039,7 @@ def _render_ofertas(usuario: dict, discs: pd.DataFrame):
                         "Tipo": st.session_state.get(f"ofe_tipo_{k}"),
                         "Status": st.session_state.get(f"ofe_status_{k}"),
                         "Encontro_Presencial": st.session_state.get(f"ofe_enc_{k}"),
+                        "Link_Plataforma": st.session_state.get(f"ofe_link_{k}", ""),
                         "Observacao": st.session_state.get(f"ofe_obs_{k}", ""),
                     },
                     turmas_marcadas,

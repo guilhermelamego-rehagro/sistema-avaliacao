@@ -22,7 +22,10 @@ jobs:
         run: |
           set -e
           echo "GET $APP_URL"
-          code=$(curl -sS -L -o /tmp/st_body.html -w "%{http_code}" \
+          # Streamlit Cloud às vezes responde 303 (redirect). Com -L o código
+          # final pode ainda ser 3xx; para keep-awake, 2xx/3xx = app acordado.
+          code=$(curl -sS -L --max-redirs 10 -o /tmp/st_body.html \
+            -w "%{http_code}" \
             -A "Rehagro-keep-awake/1.0 (GitHub Actions)" \
             --max-time 90 \
             "$APP_URL" || true)
@@ -31,11 +34,15 @@ jobs:
             echo "::warning::App parece SLEEPING — abra a URL e acorde manualmente uma vez."
             exit 1
           fi
-          if [ "$code" != "200" ]; then
-            echo "::warning::Resposta inesperada HTTP $code"
-            exit 1
-          fi
-          echo "OK — app respondeu sem tela de sleep."
+          case "$code" in
+            2??|3??)
+              echo "OK — app respondeu (HTTP $code) sem tela de sleep."
+              ;;
+            *)
+              echo "::warning::Resposta inesperada HTTP $code"
+              exit 1
+              ;;
+          esac
 
       - name: Ping Supabase (opcional)
         env:

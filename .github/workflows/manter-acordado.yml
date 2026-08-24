@@ -1,8 +1,9 @@
 # Mantém o app Streamlit Cloud "acordado" (e opcionalmente o Supabase).
 # Roda a cada 8 horas (UTC). Atraso de alguns minutos é normal no GitHub Actions.
 #
-# Limite: se o app JÁ estiver sleeping, um GET pode não clicar em "acordar".
-# Com uso diário na janela de avaliações, isso costuma bastar para não cair.
+# Limite: se o app JÁ estiver sleeping, o ping NÃO clica em "acordar" —
+# aí é preciso abrir a URL no navegador uma vez. Com uso/pings periódicos
+# na janela de avaliações, costuma bastar para não cair no sleep.
 
 name: Manter app acordado
 
@@ -21,22 +22,23 @@ jobs:
           APP_URL: https://avaliacao-gga.streamlit.app
         run: |
           set -e
-          echo "GET $APP_URL"
-          # Streamlit Cloud às vezes responde 303 (redirect). Com -L o código
-          # final pode ainda ser 3xx; para keep-awake, 2xx/3xx = app acordado.
-          code=$(curl -sS -L --max-redirs 10 -o /tmp/st_body.html \
+          echo "GET $APP_URL (sem seguir redirects)"
+          # NÃO usar -L: o Cloud responde 303 e, sem cookie jar de browser,
+          # seguir redirects gera loop (curl 47 / max redirects).
+          # Para keep-awake, basta o edge responder 2xx/3xx (= tráfego chegou).
+          code=$(curl -sS --max-redirs 0 -o /tmp/st_body.html \
             -w "%{http_code}" \
             -A "Rehagro-keep-awake/1.0 (GitHub Actions)" \
             --max-time 90 \
             "$APP_URL" || true)
           echo "HTTP $code"
-          if grep -qiE "sleeping|get this app back up" /tmp/st_body.html; then
+          if [ -f /tmp/st_body.html ] && grep -qiE "sleeping|get this app back up" /tmp/st_body.html; then
             echo "::warning::App parece SLEEPING — abra a URL e acorde manualmente uma vez."
             exit 1
           fi
           case "$code" in
             2??|3??)
-              echo "OK — app respondeu (HTTP $code) sem tela de sleep."
+              echo "OK — Cloud respondeu HTTP $code (tráfego registrado)."
               ;;
             *)
               echo "::warning::Resposta inesperada HTTP $code"

@@ -1,0 +1,59 @@
+# Mantém o app Streamlit Cloud "acordado" (e opcionalmente o Supabase).
+# Roda a cada 8 horas (UTC). Atraso de alguns minutos é normal no GitHub Actions.
+#
+# Limite: se o app JÁ estiver sleeping, um GET pode não clicar em "acordar".
+# Com uso diário na janela de avaliações, isso costuma bastar para não cair.
+
+name: Manter app acordado
+
+on:
+  schedule:
+    - cron: "0 */8 * * *"
+  workflow_dispatch: # rodar manualmente em Actions → Run workflow
+
+jobs:
+  keep-awake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping Streamlit Cloud
+        env:
+          APP_URL: https://avaliacao-gga.streamlit.app
+        run: |
+          set -e
+          echo "GET $APP_URL"
+          code=$(curl -sS -L -o /tmp/st_body.html -w "%{http_code}" \
+            -A "Rehagro-keep-awake/1.0 (GitHub Actions)" \
+            --max-time 90 \
+            "$APP_URL" || true)
+          echo "HTTP $code"
+          if grep -qiE "sleeping|get this app back up" /tmp/st_body.html; then
+            echo "::warning::App parece SLEEPING — abra a URL e acorde manualmente uma vez."
+            exit 1
+          fi
+          if [ "$code" != "200" ]; then
+            echo "::warning::Resposta inesperada HTTP $code"
+            exit 1
+          fi
+          echo "OK — app respondeu sem tela de sleep."
+
+      - name: Ping Supabase (opcional)
+        if: ${{ secrets.SUPABASE_URL != '' && secrets.SUPABASE_ANON_KEY != '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -e
+          # Consulta mínima — conta como atividade do projeto (anti-hibernação ~7 dias).
+          code=$(curl -sS -o /tmp/sb.json -w "%{http_code}" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            --max-time 30 \
+            "${SUPABASE_URL}/rest/v1/perfis_usuario?select=id&limit=1")
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Supabase HTTP $code"
+            cat /tmp/sb.json || true
+            exit 1
+          fi
+          echo "OK — Supabase respondeu."

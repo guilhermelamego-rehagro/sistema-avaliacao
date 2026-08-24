@@ -38,13 +38,15 @@ jobs:
           echo "OK — app respondeu sem tela de sleep."
 
       - name: Ping Supabase (opcional)
-        if: ${{ secrets.SUPABASE_URL != '' && secrets.SUPABASE_ANON_KEY != '' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "Secrets SUPABASE_URL / SUPABASE_ANON_KEY não definidos — pulando Supabase."
+            exit 0
+          fi
           set -e
-          # Consulta mínima — conta como atividade do projeto (anti-hibernação ~7 dias).
           code=$(curl -sS -o /tmp/sb.json -w "%{http_code}" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY" \

@@ -11,6 +11,7 @@ from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina
 from domain.encontro_presencial import resolver_id_ciclo_componente
 from domain.presenca import calcular_matriz_dailies
+from utils.disciplina import normalizar_id
 
 
 def calcular_nota_pares(media_0_5: float, realizou_avaliacao: bool) -> float:
@@ -125,10 +126,16 @@ def _nota_atividades(email: str, id_disciplina: str) -> tuple[float | None, str]
     return round(float(media), 1), f"Média de {len(filtro)} atividade(s)"
 
 
-def _nota_dailies(email: str) -> tuple[float | None, str]:
+def _nota_dailies(email: str, id_disciplina: str = "") -> tuple[float | None, str]:
     df = calcular_matriz_dailies(email)
     if df.empty:
         return None, "Sem calendário de dailies"
+
+    id_limpo = normalizar_id(id_disciplina)
+    if id_limpo and "ID_Disciplina" in df.columns:
+        df = df[df["ID_Disciplina"].map(normalizar_id) == id_limpo]
+    if df.empty:
+        return None, "Sem calendário de dailies nesta disciplina"
 
     vivido = df[df["Status_Tecnico"] != "Futuro"]
     if vivido.empty:
@@ -152,6 +159,9 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
 
         nota: float | None = None
         detalhe = ""
+        nota_ori: float | None = None
+        nota_grp: float | None = None
+        nota_par: float | None = None
 
         if tipo in ("Ciclo", "Entrega_Final") and id_ciclo:
             nota_ori = obter_nota_orientador(id_ciclo, email)
@@ -165,7 +175,7 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
                 nota = calcular_nota_ciclo(nota_ori, nota_par, nota_grp)
 
         elif tipo == "Reuniao_Diaria":
-            nota, detalhe = _nota_dailies(email)
+            nota, detalhe = _nota_dailies(email, id_disciplina)
 
         elif tipo == "Atividade_Individual":
             nota, detalhe = _nota_atividades(email, id_disciplina)
@@ -175,8 +185,12 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
         linhas.append(
             {
                 "Componente": nome,
+                "Tipo": tipo,
                 "Peso (%)": peso,
                 "Nota (0-100)": nota,
+                "Nota_Orientador": nota_ori,
+                "Nota_Pares": nota_par,
+                "Nota_Grupo": nota_grp,
                 "Contribuição": contribuicao,
                 "Detalhe": detalhe,
             }
@@ -193,3 +207,109 @@ def nota_final_boletim(df_boletim: pd.DataFrame) -> float | None:
             return None
         return round(float(contrib.sum()), 2)
     return round(float(df_boletim["Contribuição"].sum()), 2)
+
+
+def status_academico(
+    pct_presenca: float | None,
+    nota_final: float | None,
+    *,
+    minimo_presenca: float = 75.0,
+) -> str:
+    """
+    Regras de resultado da disciplina:
+    - Presença < 75%: Reprovado (presença), independente da nota.
+    - Presença >= 75%:
+        - nota < 40: Reprovado
+        - 40 <= nota < 70: Recuperação
+        - nota >= 70: Aprovado
+    """
+    if pct_presenca is not None and float(pct_presenca) < minimo_presenca:
+        return "Reprovado (presença)"
+    if nota_final is None:
+        return "Pendente"
+    nota = float(nota_final)
+    if nota < 40:
+        return "Reprovado"
+    if nota < 70:
+        return "Recuperação"
+    return "Aprovado"
+
+
+def _fmt_nota_painel(valor: float | None) -> str:
+    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+        return "—"
+    return f"{float(valor):.1f}"
+
+
+def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
+    """
+    Monta tabela de boletins da disciplina para a tela de liberação de notas.
+    Inclui presença realizada (com encontro presencial na conta) e status acadêmico.
+    """
+    from domain.presenca import carregar_base_presenca, compilar_grid_frequencia
+    from utils.disciplina import normalizar_id
+
+    id_disc = normalizar_id(id_disciplina)
+    df_ent = ler_aba("Entrancia_Turma")
+    if df_ent.empty:
+        return pd.DataFrame()
+
+    alunos = df_ent[
+        df_ent["ID_Disciplina"].astype(str).map(normalizar_id) == id_disc
+    ].copy()
+    if alunos.empty:
+        return pd.DataFrame()
+
+    # Um vínculo por e-mail (primeira ocorrência).
+    alunos["Email_Limpo"] = alunos["Email_Pessoal"].astype(str).str.strip().str.lower()
+    alunos = alunos.drop_duplicates(subset=["Email_Limpo"], keep="first")
+
+    dfs_cache = carregar_base_presenca()
+    df_freq, _ = compilar_grid_frequencia(id_disc, alunos, dfs_cache=dfs_cache)
+    freq_por_email: dict[str, float] = {}
+    if not df_freq.empty:
+        for _, fr in df_freq.iterrows():
+            em = str(fr.get("Email_Cru", "")).strip().lower()
+            freq_por_email[em] = float(fr.get("% Realizado", 0))
+
+    linhas: list[dict] = []
+    for _, aluno in alunos.iterrows():
+        email = str(aluno["Email_Pessoal"]).strip()
+        email_l = email.lower()
+        nome = str(aluno.get("Nome_Completo", "")).strip()
+        turma = str(aluno.get("Turma_Ingresso", "")).strip() or "—"
+        grupo = str(aluno.get("Grupo", "")).strip()
+        sala = str(aluno.get("Sala", "")).strip()
+        pct = freq_por_email.get(email_l)
+
+        boletim = calcular_boletim_aluno(email_l, id_disc, grupo, sala)
+        nota_final = nota_final_boletim(boletim)
+        status = status_academico(pct, nota_final)
+
+        linha: dict = {
+            "Nome": nome,
+            "Turma": turma,
+            "Grupo": grupo,
+            "Sala": sala or "—",
+            "Presença (%)": None if pct is None else round(pct, 1),
+        }
+
+        for _, comp in boletim.iterrows():
+            nome_comp = str(comp["Componente"]).strip()
+            tipo = str(comp.get("Tipo", "")).strip()
+            if tipo in ("Ciclo", "Entrega_Final"):
+                linha[f"{nome_comp} · Orientador"] = _fmt_nota_painel(comp.get("Nota_Orientador"))
+                linha[f"{nome_comp} · Pares"] = _fmt_nota_painel(comp.get("Nota_Pares"))
+                linha[f"{nome_comp} · Grupo"] = _fmt_nota_painel(comp.get("Nota_Grupo"))
+                linha[f"{nome_comp} · Total"] = _fmt_nota_painel(comp.get("Nota (0-100)"))
+            else:
+                linha[nome_comp] = _fmt_nota_painel(comp.get("Nota (0-100)"))
+
+        linha["Nota final"] = _fmt_nota_painel(nota_final)
+        linha["Status"] = status
+        linhas.append(linha)
+
+    df = pd.DataFrame(linhas)
+    if df.empty:
+        return df
+    return df.sort_values(["Turma", "Sala", "Grupo", "Nome"], kind="stable").reset_index(drop=True)

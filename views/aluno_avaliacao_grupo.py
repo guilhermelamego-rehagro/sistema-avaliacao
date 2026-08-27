@@ -28,13 +28,20 @@ def _mapa_ciclos(id_disciplina: str) -> dict[str, tuple[int, str]]:
     return mapa
 
 
+def _titulo_ciclo(nome_ciclo: str, oficial: dict | None) -> str:
+    if not oficial:
+        return nome_ciclo
+    total = formatar_nota_entrega(oficial["nota_total"])
+    ap = formatar_nota_entrega(oficial["nota_apresentacao"])
+    ct = formatar_nota_entrega(oficial["nota_conteudo"])
+    quesitos = f"Apresentação {ap} · Conteúdo {ct}"
+    if oficial.get("origem") == "conferencia":
+        return f"{nome_ciclo} — nota da coordenação {total} ({quesitos})"
+    return f"{nome_ciclo} — média da banca {total} ({quesitos})"
+
+
 def render(usuario: dict):
     st.header("Avaliação do grupo")
-    st.caption(
-        "Comentários da banca. A nota do grupo (média ou conferência) só aparece "
-        "com 2+ avaliações de professores, após o fim da janela de pares do ciclo, "
-        "ou se a coordenação registrar nota de conferência."
-    )
     registrar_log_acesso(usuario["email"], usuario["nome"], "Visualizou Avaliação do Grupo")
 
     id_disc, nome_disc = obter_disciplina_ativa()
@@ -74,40 +81,23 @@ def render(usuario: dict):
         itens = sorted(por_ciclo[id_ciclo], key=lambda x: x["nome_avaliador"].lower())
         nome_ciclo = ordem.get(id_ciclo, (0, itens[0]["nome_ciclo"] or f"Ciclo {id_ciclo}"))[1]
         oficial = obter_media_avaliacao_grupo_aluno(id_ciclo, grupo, sala, str(id_disc))
-
-        if oficial and oficial.get("origem") == "conferencia":
-            titulo = (
-                f"{nome_ciclo} — nota da coordenação "
-                f"{formatar_nota_entrega(oficial['nota_total'])}"
-            )
-        elif oficial:
-            titulo = (
-                f"{nome_ciclo} — média da banca "
-                f"{formatar_nota_entrega(oficial['nota_total'])}"
-            )
-        else:
-            titulo = nome_ciclo
+        titulo = _titulo_ciclo(nome_ciclo, oficial)
 
         with st.expander(titulo, expanded=True):
-            if oficial and oficial.get("origem") == "conferencia":
-                st.caption(
-                    "A coordenação registrou uma nota de conferência que substitui a média da banca."
-                )
-            elif not oficial:
-                st.caption(
-                    "A média da banca será exibida quando houver pelo menos duas "
-                    "avaliações de professores ou após o encerramento da janela de pares do ciclo."
-                )
-            for item in itens:
+            comentarios = [
+                item
+                for item in itens
+                if not item.get("eh_conferencia")
+            ]
+            if not comentarios:
+                st.info("Ainda não há comentários de professores neste ciclo.")
+                continue
+
+            for item in comentarios:
                 with st.container(border=True):
-                    rotulo = item["nome_avaliador"]
-                    if item.get("eh_conferencia"):
-                        rotulo = f"{rotulo} (conferência)"
-                    st.markdown(f"**{rotulo}**")
-                    st.write(
-                        f"Apresentação {formatar_nota_entrega(item['nota_apresentacao'])} · "
-                        f"Conteúdo {formatar_nota_entrega(item['nota_conteudo'])} · "
-                        f"Total {formatar_nota_entrega(item['nota_total'])}"
-                    )
-                    if item.get("comentario"):
-                        st.write(item["comentario"])
+                    st.markdown(f"**{item['nome_avaliador']}**")
+                    texto = (item.get("comentario") or "").strip()
+                    if texto:
+                        st.write(texto)
+                    else:
+                        st.caption("Sem comentário.")

@@ -142,6 +142,13 @@ def trocar_senha(nova_senha: str) -> str | None:
         {"deve_trocar_senha": False}
     ).eq("id", user_id).execute()
 
+    # Evita forçar nova troca após logout/login: o cache do perfil (TTL 5 min)
+    # ainda podia devolver deve_trocar_senha=True e gerar 2º "primeiro acesso".
+    try:
+        _buscar_perfil_cached.clear()
+    except Exception:
+        pass
+
     st.session_state["usuario_logado"]["deve_trocar_senha"] = False
     st.session_state.pop("_recuperacao_senha", None)
     return None

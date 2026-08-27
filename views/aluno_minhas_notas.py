@@ -41,7 +41,7 @@ def render(usuario: dict):
         else:
             st.metric("Nota final parcial da disciplina", "Pendente")
         st.caption(
-            "A nota final considera os pesos configurados pelo orientador "
+            "A nota final considera os pesos configurados pelo orientador(a) "
             "para os componentes já avaliados."
         )
     else:
@@ -50,8 +50,19 @@ def render(usuario: dict):
         )
 
     st.subheader("Detalhamento por componente")
+    cols_exibir = [
+        c
+        for c in (
+            "Componente",
+            "Peso (%)",
+            "Nota (0-100)",
+            "Contribuição",
+            "Detalhe",
+        )
+        if c in df_boletim.columns
+    ]
     st.dataframe(
-        df_boletim,
+        df_boletim[cols_exibir],
         width="stretch",
         hide_index=True,
         column_config={

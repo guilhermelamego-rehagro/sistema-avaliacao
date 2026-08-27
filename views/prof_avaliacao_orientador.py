@@ -4,7 +4,6 @@ import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba, texto_planilha
-from domain.anotacoes_daily import anotacoes_do_grupo
 from domain.avaliacoes import (
     carregar_mapa_notas_orientador,
     formatar_nota_grid,
@@ -144,6 +143,9 @@ def render(usuario: dict):
 
     df_entrancia = ler_aba("Entrancia_Turma")
     alunos = df_entrancia[df_entrancia["ID_Disciplina"].astype(str).str.strip() == id_disc].copy()
+    from domain.filtros_operacionais import filtrar_entrancia_operacional
+
+    alunos = filtrar_entrancia_operacional(alunos, id_disc, exigir_grupo=False)
     alunos = alunos.sort_values("Nome_Completo")
 
     c1, c2, c3 = st.columns(3)
@@ -236,7 +238,7 @@ def render(usuario: dict):
         visao = df_editado[["Nome", "Sala", "Grupo"] + colunas_ciclo].copy()
         st.dataframe(_estilo_celulas_invalidas(visao, invalidas_sessao), width="stretch", hide_index=True)
 
-    _render_anotacoes_dailies(id_disc, filtro_sala, filtro_grupo)
+    _render_anotacoes_dailies(id_disc, filtro_sala, filtro_grupo, usuario)
 
     st.markdown("---")
     st.subheader("Lançamento em lote")
@@ -282,14 +284,16 @@ def render(usuario: dict):
                 st.rerun()
 
 
-def _render_anotacoes_dailies(id_disc: str, filtro_sala: str, filtro_grupo: str):
+def _render_anotacoes_dailies(id_disc: str, filtro_sala: str, filtro_grupo: str, usuario: dict):
+    from domain.anotacoes_daily import AVISO_USO_INTERNO, anotacoes_do_grupo, assert_acesso_docente
+
     st.markdown("---")
     st.subheader("Dailies do grupo — compilado")
-    st.caption(
-        "Anotações internas da orientação, para embasar a nota. "
-        "Não entram no boletim do aluno."
-    )
-    notas = anotacoes_do_grupo(id_disc, filtro_sala, filtro_grupo)
+    st.caption(AVISO_USO_INTERNO)
+    if assert_acesso_docente(usuario):
+        st.warning("Sem permissão para ver anotações de daily.")
+        return
+    notas = anotacoes_do_grupo(id_disc, filtro_sala, filtro_grupo, usuario=usuario)
     if notas.empty:
         st.info("Nenhuma anotação de daily para este recorte. Lance em Avaliações do ciclo → Anotações da daily.")
         return
@@ -298,18 +302,16 @@ def _render_anotacoes_dailies(id_disc: str, filtro_sala: str, filtro_grupo: str)
 
         for grupo in ordenar_grupos_lista(notas["Grupo"].unique().tolist()):
             bloco = notas[notas["Grupo"] == grupo]
-            with st.expander(f"Grupo {grupo} ({len(bloco)} daily(s))", expanded=False):
+            with st.expander(f"Grupo {grupo} ({len(bloco)} daily(ies))", expanded=False):
                 _tabela_anotacoes(bloco)
         return
     _tabela_anotacoes(notas)
 
 
 def _tabela_anotacoes(df: pd.DataFrame):
-    visao = df[["Data", "Nome_Ciclo", "Sala", "Grupo", "Texto", "Nome_Orientador"]].rename(
-        columns={
-            "Nome_Ciclo": "Ciclo",
-            "Texto": "Anotação",
-            "Nome_Orientador": "Orientadora",
-        }
+    from domain.anotacoes_daily import dataframe_anotacoes
+
+    dataframe_anotacoes(
+        df,
+        colunas=["Data", "Ciclo", "Sala", "Grupo", "Anotação", "Orientador(a)"],
     )
-    st.dataframe(visao, width="stretch", hide_index=True)

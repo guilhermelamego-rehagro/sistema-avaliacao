@@ -8,8 +8,12 @@ import streamlit as st
 from auth.supabase_auth import professor_e_orientador
 from data.sheets import ler_aba
 from domain.anotacoes_daily import (
+    AVISO_USO_INTERNO,
     anotacoes_do_grupo,
+    assert_acesso_docente,
+    autor_rotulo,
     data_daily_padrao,
+    dataframe_anotacoes,
     datas_dailies_disciplina,
     salvar_anotacao,
 )
@@ -30,9 +34,15 @@ def _grupos_da_sala(alunos: pd.DataFrame, sala: str) -> list[str]:
 
 def render_pagina(usuario: dict):
     st.header("Anotações da daily")
+    bloqueio = assert_acesso_docente(usuario)
+    if bloqueio:
+        st.error(bloqueio)
+        return
+    st.caption(AVISO_USO_INTERNO)
     st.caption(
-        "Um texto por grupo e data. A sala vem do cadastro da orientadora e pode ser trocada. "
-        "O ciclo é inferido pelo período acadêmico (início do ciclo até a apresentação)."
+        "Um texto por grupo e data. A sala vem do cadastro do orientador(a) e pode ser trocada. "
+        "O ciclo é inferido pelo período acadêmico (início do ciclo até a apresentação). "
+        "Cada salvamento registra quem anotou."
     )
     from domain.cadastros import carregar_disciplinas
     from utils.disciplina import indice_disciplina_ativa, id_disciplina_por_nome, remapear_coluna_id_disciplina
@@ -60,6 +70,9 @@ def render_pagina(usuario: dict):
     alunos = df_entrancia[
         df_entrancia["ID_Disciplina"].map(normalizar_id) == id_disc
     ].copy()
+    from domain.filtros_operacionais import filtrar_entrancia_operacional
+
+    alunos = filtrar_entrancia_operacional(alunos, id_disc, exigir_grupo=True)
     if alunos.empty:
         st.warning("Nenhum aluno nesta disciplina na Entrância.")
         return
@@ -116,12 +129,18 @@ def render(usuario: dict, id_disciplina: str, alunos: pd.DataFrame):
             "no cadastro de ciclos para classificar a anotação."
         )
 
-    ja = anotacoes_do_grupo(id_disc, sala, grupo)
+    ja = anotacoes_do_grupo(id_disc, sala, grupo, usuario=usuario)
     texto_atual = ""
+    autor_atual = ""
     if not ja.empty:
         mesmo_dia = ja[ja["Data"] == dia.strftime("%d/%m/%Y")]
         if not mesmo_dia.empty:
             texto_atual = str(mesmo_dia.iloc[0]["Texto"])
+            autor_atual = autor_rotulo(mesmo_dia.iloc[0])
+            atualizado = str(mesmo_dia.iloc[0].get("Data_Atualizacao") or "").strip()
+            if autor_atual and autor_atual != "—":
+                extra = f" · {atualizado}" if atualizado else ""
+                st.caption(f"Última anotação desta data por **{autor_atual}**{extra}.")
 
     with st.form(f"daily_nota_form_{id_disc}_{sala}_{grupo}_{dia}", border=False):
         texto = st.text_area(
@@ -152,15 +171,15 @@ def render(usuario: dict, id_disciplina: str, alunos: pd.DataFrame):
             st.success("Anotação salvada.")
             st.rerun()
 
-    historico = anotacoes_do_grupo(id_disc, sala, grupo)
+    historico = anotacoes_do_grupo(id_disc, sala, grupo, usuario=usuario)
     if historico.empty:
         st.info("Ainda não há anotações deste grupo nesta sala.")
         return
     st.markdown("**Últimas deste grupo**")
-    visao = historico[["Data", "Nome_Ciclo", "Texto"]].rename(
-        columns={"Nome_Ciclo": "Ciclo", "Texto": "Anotação"}
+    dataframe_anotacoes(
+        historico,
+        colunas=["Data", "Ciclo", "Anotação", "Orientador(a)", "Atualizado em"],
     )
-    st.dataframe(visao, width="stretch", hide_index=True)
 
 
 def pode_anotar(usuario: dict) -> bool:

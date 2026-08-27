@@ -298,7 +298,7 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
             nome_comp = str(comp["Componente"]).strip()
             tipo = str(comp.get("Tipo", "")).strip()
             if tipo in ("Ciclo", "Entrega_Final"):
-                linha[f"{nome_comp} · Orientador"] = _fmt_nota_painel(comp.get("Nota_Orientador"))
+                linha[f"{nome_comp} · Orientador(a)"] = _fmt_nota_painel(comp.get("Nota_Orientador"))
                 linha[f"{nome_comp} · Pares"] = _fmt_nota_painel(comp.get("Nota_Pares"))
                 linha[f"{nome_comp} · Grupo"] = _fmt_nota_painel(comp.get("Nota_Grupo"))
                 linha[f"{nome_comp} · Total"] = _fmt_nota_painel(comp.get("Nota (0-100)"))

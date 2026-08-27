@@ -936,7 +936,7 @@ def substituir_professores_ciclo(
 
 
 def salas_do_orientador(usuario: dict, id_disciplina: str | None = None) -> list[str]:
-    """Salas cadastradas para a professora orientadora nesta disciplina."""
+    """Salas cadastradas para o(a) professor(a) orientador(a) nesta disciplina."""
     nome = str((usuario or {}).get("nome") or "").strip().lower()
     email = str((usuario or {}).get("email") or "").strip().lower()
     if not nome and not email:

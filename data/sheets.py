@@ -35,6 +35,10 @@ ESCOPO = [
 ]
 
 _CACHE_TTL = 900
+# A planilha de frequência é compartilhada com rotinas operacionais externas.
+# Falhar rápido aqui evita prender o primeiro rerun após o login em vários
+# minutos de backoff quando esse arquivo está indisponível ou sob quota.
+_MAX_TENTATIVAS_FREQUENCIA = 1
 _COLUNAS_TEXTO = (
     "Sala",
     "Grupo",
@@ -154,7 +158,9 @@ def conectar_planilha_frequencia():
     )
     cliente = gspread.authorize(credenciais)
     return _requisitar_com_retry(
-        cliente.open_by_key, st.secrets["planilhas"]["id_frequencia"]
+        cliente.open_by_key,
+        st.secrets["planilhas"]["id_frequencia"],
+        max_tentativas=_MAX_TENTATIVAS_FREQUENCIA,
     )
 
 
@@ -167,7 +173,13 @@ def _titulos_abas_avaliacao() -> frozenset:
 @st.cache_resource(ttl=600)
 def _titulos_abas_frequencia() -> frozenset:
     ss = conectar_planilha_frequencia()
-    return frozenset(ws.title for ws in _requisitar_com_retry(ss.worksheets))
+    return frozenset(
+        ws.title
+        for ws in _requisitar_com_retry(
+            ss.worksheets,
+            max_tentativas=_MAX_TENTATIVAS_FREQUENCIA,
+        )
+    )
 
 
 @st.cache_resource(ttl=600)
@@ -177,7 +189,11 @@ def _worksheet_avaliacao(nome_aba: str):
 
 @st.cache_resource(ttl=600)
 def _worksheet_frequencia(nome_aba: str):
-    return _requisitar_com_retry(conectar_planilha_frequencia().worksheet, nome_aba)
+    return _requisitar_com_retry(
+        conectar_planilha_frequencia().worksheet,
+        nome_aba,
+        max_tentativas=_MAX_TENTATIVAS_FREQUENCIA,
+    )
 
 
 def _criar_aba_se_faltar(planilha_obj, nome_aba: str, colunas: list[str], titulos: set[str]) -> None:
@@ -332,14 +348,23 @@ def garantir_colunas_frequencia(nome_aba: str, colunas: list[str]) -> bool:
 def _ler_registros(ws, colunas_config: list[str] | None, *, frequencia: bool = False) -> list[dict]:
     kwargs_fn = _kwargs_get_all_records_frequencia if frequencia else _kwargs_get_all_records
     kwargs = kwargs_fn(colunas_config)
+    max_tentativas = _MAX_TENTATIVAS_FREQUENCIA if frequencia else 6
 
     def _chamar(parametros: dict) -> list[dict]:
         try:
-            return _requisitar_com_retry(ws.get_all_records, **parametros)
+            return _requisitar_com_retry(
+                ws.get_all_records,
+                max_tentativas=max_tentativas,
+                **parametros,
+            )
         except TypeError:
             fallback = dict(parametros)
             fallback.pop("value_render_option", None)
-            return _requisitar_com_retry(ws.get_all_records, **fallback)
+            return _requisitar_com_retry(
+                ws.get_all_records,
+                max_tentativas=max_tentativas,
+                **fallback,
+            )
 
     try:
         return _chamar(kwargs)

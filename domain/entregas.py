@@ -7,10 +7,13 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from config import ABAS_AVALIACAO
 from data.sheets import garantir_aba_avaliacao, ler_aba, limpar_cache_planilhas, planilha
 from domain.avaliacoes import filtrar_avaliacoes_grupo
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from utils.ordenacao import ordenar_grupos_lista
+
+_COLUNAS_ORDEM = list(ABAS_AVALIACAO["Ordem_Apresentacao"])
 
 
 def _agora() -> str:
@@ -23,9 +26,50 @@ def _parse_data(valor) -> pd.Timestamp | None:
     return pd.to_datetime(str(valor).strip(), format="%d/%m/%Y", errors="coerce")
 
 
+def _normalizar_ordem_apresentacao(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante colunas esperadas mesmo se a 1ª linha da aba virou dado (sem cabeçalho)."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=_COLUNAS_ORDEM)
+
+    out = df.copy()
+    out.columns = [str(c).strip() for c in out.columns]
+
+    if "ID_Disciplina" not in out.columns or "ID_Ciclo" not in out.columns:
+        # Cabeçalho perdido: a API leu a 1ª linha de dados como nomes de coluna.
+        reconstruido = pd.DataFrame([dict(zip(out.columns, out.columns))])
+        if not out.empty:
+            reconstruido = pd.concat([reconstruido, out], ignore_index=True)
+        reconstruido.columns = _COLUNAS_ORDEM[: len(reconstruido.columns)]
+        for col in _COLUNAS_ORDEM:
+            if col not in reconstruido.columns:
+                reconstruido[col] = ""
+        out = reconstruido[_COLUNAS_ORDEM]
+    else:
+        for col in _COLUNAS_ORDEM:
+            if col not in out.columns:
+                out[col] = ""
+        out = out[_COLUNAS_ORDEM]
+
+    # Remove linhas que são o próprio cabeçalho repetido no meio da aba.
+    mask_cabecalho = out["ID_Disciplina"].astype(str).str.strip().eq("ID_Disciplina")
+    out = out.loc[~mask_cabecalho].copy()
+    out["ID_Disciplina"] = out["ID_Disciplina"].astype(str).str.strip()
+    out["ID_Ciclo"] = out["ID_Ciclo"].astype(str).str.strip()
+    out["Sala"] = out["Sala"].astype(str).str.strip()
+    out["Grupo"] = out["Grupo"].astype(str).str.strip()
+    out = out[
+        out["ID_Disciplina"].ne("")
+        & out["ID_Ciclo"].ne("")
+        & ~out["ID_Disciplina"].isin(["nan", "None"])
+    ]
+    return out.reset_index(drop=True)
+
+
 def _filtrar_disc_ciclo(df: pd.DataFrame, id_disciplina: str, id_ciclo: str) -> pd.DataFrame:
     if df.empty:
         return df
+    if "ID_Disciplina" not in df.columns or "ID_Ciclo" not in df.columns:
+        return df.iloc[0:0].copy()
     return df[
         (df["ID_Disciplina"].astype(str).str.strip() == str(id_disciplina).strip())
         & (df["ID_Ciclo"].astype(str).str.strip() == str(id_ciclo).strip())
@@ -53,6 +97,8 @@ def obter_config_entregas(id_disciplina: str, id_ciclo: str) -> dict | None:
     try:
         df = ler_aba("Config_Entregas")
     except Exception:
+        return None
+    if df is None or df.empty or "ID_Disciplina" not in df.columns:
         return None
     filtro = _filtrar_disc_ciclo(df, id_disciplina, id_ciclo)
     if filtro.empty:
@@ -135,7 +181,7 @@ def carregar_ordem_apresentacao(
     id_disciplina: str, id_ciclo: str, sala: str
 ) -> dict[str, int]:
     try:
-        df = ler_aba("Ordem_Apresentacao")
+        df = _normalizar_ordem_apresentacao(ler_aba("Ordem_Apresentacao"))
     except Exception:
         return {}
     filtro = _filtrar_disc_ciclo_sala(df, id_disciplina, id_ciclo, sala)
@@ -145,6 +191,8 @@ def carregar_ordem_apresentacao(
     filtro["Ordem"] = pd.to_numeric(filtro["Ordem"], errors="coerce")
     mapa: dict[str, int] = {}
     for _, row in filtro.iterrows():
+        if pd.isna(row["Ordem"]):
+            continue
         mapa[str(row["Grupo"]).strip()] = int(row["Ordem"])
     return mapa
 
@@ -160,9 +208,9 @@ def salvar_ordem_apresentacao(
 ):
     garantir_aba_avaliacao("Ordem_Apresentacao")
     try:
-        df = ler_aba("Ordem_Apresentacao")
+        df = _normalizar_ordem_apresentacao(ler_aba("Ordem_Apresentacao"))
     except Exception:
-        df = pd.DataFrame(columns=["ID_Disciplina", "ID_Ciclo", "Sala", "Grupo", "Ordem"])
+        df = pd.DataFrame(columns=_COLUNAS_ORDEM)
 
     if df.empty:
         restante = df
@@ -170,23 +218,22 @@ def salvar_ordem_apresentacao(
         mesmo_escopo = (
             (df["ID_Disciplina"].astype(str).str.strip() == str(id_disciplina).strip())
             & (df["ID_Ciclo"].astype(str).str.strip() == str(id_ciclo).strip())
+            & (df["Sala"].astype(str).str.strip() == str(sala).strip())
         )
-        if "Sala" in df.columns:
-            mesmo_escopo = mesmo_escopo & (df["Sala"].astype(str).str.strip() == str(sala).strip())
         restante = df[~mesmo_escopo]
 
     novas = []
     for grupo, ordem in sorted(ordens.items(), key=lambda x: x[1]):
         novas.append([id_disciplina, id_ciclo, str(sala), str(grupo), int(ordem)])
 
+    linhas = [_COLUNAS_ORDEM]
+    for _, row in restante.iterrows():
+        linhas.append([str(row.get(c, "")) for c in _COLUNAS_ORDEM])
+    linhas.extend(novas)
+
     ws = planilha.worksheet("Ordem_Apresentacao")
     ws.clear()
-    ws.append_row(["ID_Disciplina", "ID_Ciclo", "Sala", "Grupo", "Ordem"])
-    for _, row in restante.iterrows():
-        vals = [str(row.get(c, "")) for c in ["ID_Disciplina", "ID_Ciclo", "Sala", "Grupo", "Ordem"]]
-        ws.append_row(vals)
-    if novas:
-        ws.append_rows(novas)
+    ws.update(range_name="A1", values=linhas, value_input_option="USER_ENTERED")
     limpar_cache_planilhas()
 
 

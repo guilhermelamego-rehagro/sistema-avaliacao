@@ -9,6 +9,7 @@ import streamlit as st
 
 from data.sheets import ler_aba
 from domain.dashboard_curso import (
+    ITENS_METRICA,
     ITENS_TEXTO,
     anexar_codigo_disciplina,
     carregar_respostas_curso,
@@ -219,7 +220,7 @@ def render(usuario: dict):
             )
 
         st.subheader("Métricas por ciclo (0–5)")
-        st.caption("Cada critério em uma linha; colunas = código · ciclo; valor = média (N).")
+        st.caption("Cada ciclo em uma linha; colunas = critérios (fixas); valor = média (N).")
         if met_tabela.empty or len(met_tabela.columns) <= 1:
             st.caption("Sem métricas por ciclo neste recorte.")
         else:
@@ -271,8 +272,13 @@ def render(usuario: dict):
                 | vista["Email"].astype(str).str.casefold().str.contains(busca, na=False)
             ]
         st.caption(f"{len(vista)} aluno(s) × ciclo no filtro.")
+        cols_ui = [
+            c
+            for c in ["Aluno", "Codigo", "Ciclo", "NPS", "Categoria", *ITENS_METRICA]
+            if c in vista.columns
+        ]
         st.dataframe(
-            vista.rename(columns={"Codigo": "Código"}),
+            vista[cols_ui].rename(columns={"Codigo": "Código"}),
             width="stretch",
             hide_index=True,
         )

@@ -405,9 +405,9 @@ def metricas_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def metricas_comparativo_tabela(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame:
-    """Critério nas linhas, código·ciclo nas colunas; célula = 'média (N)'."""
+    """Ciclo (código · nome) nas linhas; critérios nas colunas (número fixo); célula = 'média (N)'."""
     if df_metricas_ciclo is None or df_metricas_ciclo.empty:
-        return pd.DataFrame(columns=["Critério"])
+        return pd.DataFrame(columns=["Ciclo", *ITENS_METRICA])
     base = df_metricas_ciclo.copy()
     if "Rotulo" not in base.columns:
         base["Rotulo"] = [
@@ -427,18 +427,20 @@ def metricas_comparativo_tabela(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame
         ),
         axis=1,
     )
-    ordem_cols = (
+    ordem_linhas = (
         base[["Rotulo", "Codigo", "Ciclo"]]
         .drop_duplicates()
         .sort_values(["Codigo", "Ciclo"])["Rotulo"]
         .tolist()
     )
     pivot = base.pivot_table(
-        index="Item", columns="Rotulo", values="Celula", aggfunc="first"
+        index="Rotulo", columns="Item", values="Celula", aggfunc="first"
     )
-    pivot = pivot.reindex(columns=ordem_cols)
-    pivot = pivot.reindex(index=list(ITENS_METRICA))
-    pivot = pivot.fillna("-").reset_index().rename(columns={"Item": "Critério"})
+    for item in ITENS_METRICA:
+        if item not in pivot.columns:
+            pivot[item] = "-"
+    pivot = pivot.reindex(index=ordem_linhas, columns=list(ITENS_METRICA))
+    pivot = pivot.fillna("-").reset_index().rename(columns={"Rotulo": "Ciclo"})
     pivot.columns.name = None
     return pivot
 

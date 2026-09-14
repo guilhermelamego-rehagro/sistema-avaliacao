@@ -258,22 +258,56 @@ def contagem_respondentes(df: pd.DataFrame) -> int:
     return int(df["Email_Aluno"].nunique())
 
 
+def _nome_ciclo_grupo(grupo: pd.DataFrame, id_c: str) -> str:
+    if "Ciclo" in grupo.columns:
+        nomes = [n for n in grupo["Ciclo"].map(_texto).tolist() if n]
+        if nomes:
+            return nomes[0]
+    return str(id_c).strip()
+
+
+def _disciplina_grupo(grupo: pd.DataFrame) -> str:
+    if "Disciplina" not in grupo.columns:
+        return ""
+    nomes = [n for n in grupo["Disciplina"].map(_texto).tolist() if n]
+    return nomes[0] if nomes else ""
+
+
+def rotulo_ciclo_disciplina(ciclo: str, disciplina: str = "") -> str:
+    """Rótulo único na comparação (evita juntar 'Ciclo 1' de disciplinas diferentes)."""
+    ciclo_t = _texto(ciclo) or "—"
+    disc_t = _texto(disciplina)
+    if disc_t:
+        return f"{disc_t} · {ciclo_t}"
+    return ciclo_t
+
+
 def nps_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
-    """Uma linha por ciclo (comparativo)."""
-    cols = ["ID_Ciclo", "Ciclo", "NPS", "Respondentes", "Promotores", "Passivos", "Detratores"]
+    """Uma linha por ciclo (comparativo), com disciplina no rótulo."""
+    cols = [
+        "ID_Ciclo",
+        "Disciplina",
+        "Ciclo",
+        "Rotulo",
+        "NPS",
+        "Respondentes",
+        "Promotores",
+        "Passivos",
+        "Detratores",
+    ]
     if df is None or df.empty or "ID_Ciclo" not in df.columns:
         return pd.DataFrame(columns=cols)
     linhas = []
     for id_c, grupo in df.groupby("ID_Ciclo", sort=False):
         resumo = nps_do_recorte(grupo)
-        nome = ""
-        if "Ciclo" in grupo.columns:
-            nomes = [n for n in grupo["Ciclo"].map(_texto).tolist() if n]
-            nome = nomes[0] if nomes else str(id_c)
+        nome = _nome_ciclo_grupo(grupo, str(id_c))
+        disc = _disciplina_grupo(grupo)
         linhas.append(
             {
                 "ID_Ciclo": str(id_c).strip(),
-                "Ciclo": nome or str(id_c).strip(),
+                "Disciplina": disc,
+                "Ciclo": nome,
+                "Rotulo": rotulo_ciclo_disciplina(nome, disc),
                 "NPS": resumo.nps,
                 "Respondentes": resumo.respondentes,
                 "Promotores": resumo.promotores,
@@ -282,26 +316,27 @@ def nps_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
             }
         )
     out = pd.DataFrame(linhas, columns=cols)
-    return out.sort_values("Ciclo").reset_index(drop=True)
+    return out.sort_values(["Disciplina", "Ciclo"]).reset_index(drop=True)
 
 
 def metricas_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
-    """Métricas 0–5 por ciclo (formato longo: Ciclo, Item, Média, N)."""
-    cols = ["ID_Ciclo", "Ciclo", "Item", "Média", "N"]
+    """Métricas 0–5 por ciclo (formato longo), com disciplina no rótulo."""
+    cols = ["ID_Ciclo", "Disciplina", "Ciclo", "Rotulo", "Item", "Média", "N"]
     if df is None or df.empty or "ID_Ciclo" not in df.columns:
         return pd.DataFrame(columns=cols)
     linhas = []
     for id_c, grupo in df.groupby("ID_Ciclo", sort=False):
-        nome = ""
-        if "Ciclo" in grupo.columns:
-            nomes = [n for n in grupo["Ciclo"].map(_texto).tolist() if n]
-            nome = nomes[0] if nomes else str(id_c)
+        nome = _nome_ciclo_grupo(grupo, str(id_c))
+        disc = _disciplina_grupo(grupo)
+        rotulo = rotulo_ciclo_disciplina(nome, disc)
         met = media_itens_metricas(grupo)
         for _, row in met.iterrows():
             linhas.append(
                 {
                     "ID_Ciclo": str(id_c).strip(),
-                    "Ciclo": nome or str(id_c).strip(),
+                    "Disciplina": disc,
+                    "Ciclo": nome,
+                    "Rotulo": rotulo,
                     "Item": row["Item"],
                     "Média": row["Média"],
                     "N": row["N"],
@@ -312,20 +347,42 @@ def metricas_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
         return out
     ordem = {nome: i for i, nome in enumerate(ITENS_METRICA)}
     out["_ord"] = out["Item"].map(ordem)
-    return out.sort_values(["Ciclo", "_ord"]).drop(columns=["_ord"]).reset_index(drop=True)
+    return out.sort_values(["Disciplina", "Ciclo", "_ord"]).drop(columns=["_ord"]).reset_index(drop=True)
 
 
-def metricas_comparativo_largura(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame:
-    """Pivot Ciclo × Item para st.bar_chart / visualização lado a lado."""
+def metricas_comparativo_tabela(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame:
+    """Critério nas linhas, ciclo (com disciplina) nas colunas; célula = 'média (N)'."""
     if df_metricas_ciclo is None or df_metricas_ciclo.empty:
-        return pd.DataFrame()
-    pivot = df_metricas_ciclo.pivot_table(
-        index="Ciclo", columns="Item", values="Média", aggfunc="mean"
+        return pd.DataFrame(columns=["Critério"])
+    base = df_metricas_ciclo.copy()
+    if "Rotulo" not in base.columns:
+        base["Rotulo"] = [
+            rotulo_ciclo_disciplina(c, d)
+            for c, d in zip(base.get("Ciclo", ""), base.get("Disciplina", ""))
+        ]
+    base["Celula"] = base.apply(
+        lambda r: (
+            f"{float(r['Média']):.2f} ({int(r['N'])})"
+            if pd.notna(r.get("Média"))
+            else "—"
+        ),
+        axis=1,
     )
-    for item in ITENS_METRICA:
-        if item not in pivot.columns:
-            pivot[item] = pd.NA
-    return pivot.reindex(columns=list(ITENS_METRICA))
+    # Ordem estável de colunas: Disciplina + Ciclo
+    ordem_cols = (
+        base[["Rotulo", "Disciplina", "Ciclo"]]
+        .drop_duplicates()
+        .sort_values(["Disciplina", "Ciclo"])["Rotulo"]
+        .tolist()
+    )
+    pivot = base.pivot_table(
+        index="Item", columns="Rotulo", values="Celula", aggfunc="first"
+    )
+    pivot = pivot.reindex(columns=ordem_cols)
+    pivot = pivot.reindex(index=list(ITENS_METRICA))
+    pivot = pivot.fillna("—").reset_index().rename(columns={"Item": "Critério"})
+    pivot.columns.name = None
+    return pivot
 
 
 def _sem_acento(texto: str) -> str:
@@ -333,10 +390,33 @@ def _sem_acento(texto: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
+def _pdf_safe(texto: str, unicode_ok: bool) -> str:
+    """Helvetica no Cloud não aceita travessão/aspas tipográficas; sanitiza sempre."""
+    s = _texto(texto)
+    for origem, destino in (
+        ("—", "-"),
+        ("–", "-"),
+        ("−", "-"),
+        ("·", "-"),
+        ("…", "..."),
+        ("“", '"'),
+        ("”", '"'),
+        ("‘", "'"),
+        ("’", "'"),
+        ("×", "x"),
+    ):
+        s = s.replace(origem, destino)
+    if not unicode_ok:
+        s = _sem_acento(s)
+        s = s.encode("latin-1", errors="replace").decode("latin-1")
+    return s
+
+
 def _resolver_fonte_pdf(pdf) -> tuple[str, bool]:
     """Retorna (nome_fonte, unicode). Tenta DejaVu/Arial; senão Helvetica ASCII."""
     candidatos = [
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
         ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
         ("/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ]
@@ -364,6 +444,7 @@ def gerar_pdf_recorte(
     didatica: pd.DataFrame,
     modo_grafico: str,
     nps_ciclos: pd.DataFrame | None = None,
+    metricas_tabela: pd.DataFrame | None = None,
 ) -> bytes:
     """PDF resumido do recorte filtrado (sem comentários longos)."""
     from fpdf import FPDF
@@ -374,8 +455,7 @@ def gerar_pdf_recorte(
     fonte, unicode_ok = _resolver_fonte_pdf(pdf)
 
     def t(valor) -> str:
-        s = _texto(valor)
-        return s if unicode_ok else _sem_acento(s)
+        return _pdf_safe(valor, unicode_ok)
 
     def titulo(txt: str, size: int = 14):
         pdf.set_font(fonte, "B", size)
@@ -389,9 +469,9 @@ def gerar_pdf_recorte(
         pdf.multi_cell(pdf.epw, 6, t(txt))
 
     agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
-    titulo("Dashboard — avaliação do curso")
+    titulo("Dashboard - avaliacao do curso")
     corpo(f"Gerado em {agora}")
-    corpo(f"Modo de gráficos: {modo_grafico}")
+    corpo(f"Modo de graficos: {modo_grafico}")
     discs = ", ".join(disciplinas) if disciplinas else "Todas"
     corpo(f"Disciplina(s): {discs}")
     pdf.ln(2)
@@ -407,9 +487,9 @@ def gerar_pdf_recorte(
         pdf.ln(2)
 
     titulo("NPS (acumulado do filtro)", 12)
-    nps_txt = f"{nps.nps:.1f}" if nps.nps is not None else "—"
+    nps_txt = f"{nps.nps:.1f}" if nps.nps is not None else "-"
     corpo(
-        f"NPS: {nps_txt} | Respondentes únicos: {n_alunos} | "
+        f"NPS: {nps_txt} | Respondentes unicos: {n_alunos} | "
         f"Base NPS: {nps.respondentes} | "
         f"Promotores: {nps.promotores} ({nps.pct_promotores}%) | "
         f"Passivos: {nps.passivos} ({nps.pct_passivos}%) | "
@@ -421,20 +501,28 @@ def gerar_pdf_recorte(
         titulo("NPS por ciclo", 12)
         for _, row in nps_ciclos.iterrows():
             val = row.get("NPS")
-            val_txt = f"{val:.1f}" if val is not None and pd.notna(val) else "—"
-            corpo(f"- {row.get('Ciclo')}: NPS {val_txt} (n={int(row.get('Respondentes') or 0)})")
+            val_txt = f"{val:.1f}" if val is not None and pd.notna(val) else "-"
+            rotulo = row.get("Rotulo") or row.get("Ciclo")
+            corpo(f"- {rotulo}: NPS {val_txt} (n={int(row.get('Respondentes') or 0)})")
         pdf.ln(2)
 
-    if metricas is not None and not metricas.empty:
-        titulo("Métricas gerais (0–5)", 12)
+    if metricas_tabela is not None and not metricas_tabela.empty:
+        titulo("Metricas por ciclo (0-5)", 12)
+        cols = [str(c) for c in metricas_tabela.columns]
+        corpo(" | ".join(cols))
+        for _, row in metricas_tabela.iterrows():
+            corpo(" | ".join(_texto(row.get(c)) or "-" for c in cols))
+        pdf.ln(2)
+    elif metricas is not None and not metricas.empty:
+        titulo("Metricas gerais (0-5)", 12)
         for _, row in metricas.iterrows():
-            corpo(f"- {row.get('Item')}: média {row.get('Média')} (n={int(row.get('N') or 0)})")
+            corpo(f"- {row.get('Item')}: media {row.get('Média')} (n={int(row.get('N') or 0)})")
         pdf.ln(2)
 
     if didatica is not None and not didatica.empty:
-        titulo("Didática dos professores (0–5)", 12)
+        titulo("Didatica dos professores (0-5)", 12)
         for _, row in didatica.iterrows():
-            corpo(f"- {row.get('Professor')}: média {row.get('Média')} (n={int(row.get('N') or 0)})")
+            corpo(f"- {row.get('Professor')}: media {row.get('Média')} (n={int(row.get('N') or 0)})")
 
     buf = io.BytesIO()
     pdf.output(buf)

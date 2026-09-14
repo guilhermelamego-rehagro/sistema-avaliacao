@@ -16,7 +16,7 @@ from domain.dashboard_curso import (
     gerar_pdf_recorte,
     media_didatica_professores,
     media_itens_metricas,
-    metricas_comparativo_largura,
+    metricas_comparativo_tabela,
     metricas_por_ciclo,
     nps_do_recorte,
     nps_por_ciclo,
@@ -184,6 +184,7 @@ def render(usuario: dict):
     didatica = media_didatica_professores(recorte)
     nps_ciclos = nps_por_ciclo(recorte)
     met_ciclos = metricas_por_ciclo(recorte)
+    met_tabela = metricas_comparativo_tabela(met_ciclos)
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Respondentes", n_alunos)
@@ -200,18 +201,20 @@ def render(usuario: dict):
         if nps_ciclos.empty:
             st.caption("Sem NPS por ciclo neste recorte.")
         else:
-            chart_nps = nps_ciclos.set_index("Ciclo")[["NPS"]].copy()
+            chart_nps = nps_ciclos.set_index("Rotulo")[["NPS"]].copy()
             st.bar_chart(chart_nps)
-            st.dataframe(nps_ciclos, width="stretch", hide_index=True)
+            st.dataframe(
+                nps_ciclos[["Disciplina", "Ciclo", "NPS", "Respondentes", "Promotores", "Passivos", "Detratores"]],
+                width="stretch",
+                hide_index=True,
+            )
 
         st.subheader("Métricas por ciclo (0–5)")
-        if met_ciclos.empty:
+        st.caption("Cada critério em uma linha; colunas = disciplina · ciclo; valor = média (N).")
+        if met_tabela.empty or len(met_tabela.columns) <= 1:
             st.caption("Sem métricas por ciclo neste recorte.")
         else:
-            pivot = metricas_comparativo_largura(met_ciclos)
-            if not pivot.empty:
-                st.bar_chart(pivot)
-            st.dataframe(met_ciclos, width="stretch", hide_index=True)
+            st.dataframe(met_tabela, width="stretch", hide_index=True)
     else:
         st.subheader("Métricas gerais (0–5) — acumulado")
         if metricas.empty:
@@ -241,6 +244,7 @@ def render(usuario: dict):
         periodos.to_excel(writer, index=False, sheet_name="Periodos")
         metricas.to_excel(writer, index=False, sheet_name="Metricas")
         nps_ciclos.to_excel(writer, index=False, sheet_name="NPS_por_ciclo")
+        met_tabela.to_excel(writer, index=False, sheet_name="Metricas_comparativo")
         met_ciclos.to_excel(writer, index=False, sheet_name="Metricas_por_ciclo")
         didatica.to_excel(writer, index=False, sheet_name="Didatica")
         pd.DataFrame(
@@ -278,6 +282,7 @@ def render(usuario: dict):
                 didatica=didatica,
                 modo_grafico=modo,
                 nps_ciclos=nps_ciclos if modo == "Comparar ciclos" else None,
+                metricas_tabela=met_tabela if modo == "Comparar ciclos" else None,
             )
             st.download_button(
                 "Baixar PDF do recorte",

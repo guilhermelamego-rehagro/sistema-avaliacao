@@ -1,5 +1,6 @@
 # Secrets e credenciais — NUNCA commitar
 .streamlit/secrets.toml
+.streamlit/secrets.producao.toml
 .env
 .env.*
 

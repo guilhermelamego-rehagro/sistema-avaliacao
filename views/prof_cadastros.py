@@ -458,10 +458,10 @@ def render_ciclos(usuario: dict):
     st.caption(
         "Cada ciclo tem **duas linhas do tempo**. **Início do ciclo** e **Apresentação de projeto** "
         "marcam o período acadêmico (dailies e anotações). **Abertura** e **encerramento das pares** "
-        "são a janela em que o aluno avalia os colegas — preencha manualmente. "
+        "definem a janela em que o aluno avalia os colegas — a liberação segue essas datas. "
+        "**Status inativo** é um kill-switch: força o ciclo fechado mesmo dentro da janela. "
+        "Se duas janelas se sobrepuserem no mesmo dia, o aluno vê o ciclo de **maior Ordem**. "
         "A coluna **Ordem** vale dentro de cada disciplina (1, 2, 3…). "
-        "Status **ativo** é obrigatório. **Abertura** e **encerramento das pares** definem "
-        "quando a avaliação fica disponível para o aluno. "
         "Se a disciplina tiver **encontro presencial** e a entrega final for avaliação própria, "
         "cadastre também o ciclo **Entrega Final**.\n\n"
         "Edite a grade abaixo e clique em **Salvar ciclos** ao terminar (as alterações só vão "
@@ -483,6 +483,9 @@ def render_ciclos(usuario: dict):
     if ver_ed not in st.session_state:
         st.session_state[ver_ed] = 0
 
+    for aviso in st.session_state.pop("cad_ciclos_avisos_overlap", []) or []:
+        st.warning(aviso)
+
     filtro = st.selectbox(
         "Filtrar por disciplina:",
         ["(todas)"] + [_rotulo_disc(df_disc, i) for i in ids_disc],
@@ -490,55 +493,74 @@ def render_ciclos(usuario: dict):
     )
     df_edit = _df_ciclos_para_editor(st.session_state[chave], filtro)
     editor_key = f"editor_ciclos_v3_{filtro}_{st.session_state[ver_ed]}"
+    work_key = f"cad_ciclos_work_{filtro}_{st.session_state[ver_ed]}"
+    if work_key not in st.session_state:
+        st.session_state[work_key] = df_edit.copy()
 
-    with st.form("cad_ciclos_form", border=False):
-        edited = st.data_editor(
-            df_edit,
-            column_config={
-                "ID_Ciclo": st.column_config.TextColumn("ID do ciclo", required=True),
-                "Nome_Ciclo": st.column_config.TextColumn("Nome", required=True),
-                "ID_Disciplina": st.column_config.SelectboxColumn(
-                    "Disciplina", options=ids_disc, required=True
-                ),
-                "Data_Inicio_Ciclo": st.column_config.DateColumn(
-                    "Início do ciclo",
-                    format="DD/MM/YYYY",
-                    help="Primeiro dia acadêmico deste ciclo (dailies e anotações).",
-                ),
-                "Data_Apresentacao": st.column_config.DateColumn(
-                    "Apresentação de projeto",
-                    format="DD/MM/YYYY",
-                    help="Término acadêmico do ciclo; em geral a segunda da apresentação.",
-                ),
-                "Data início": st.column_config.DateColumn(
-                    "Abertura das pares",
-                    format="DD/MM/YYYY",
-                    help="Quando o aluno pode começar a avaliação de pares.",
-                ),
-                "Data fim": st.column_config.DateColumn(
-                    "Encerramento das pares",
-                    format="DD/MM/YYYY",
-                    help="Último dia da avaliação de pares.",
-                ),
-                "Status": st.column_config.SelectboxColumn("Status", options=STATUS_OPCOES, required=True),
-                "Ordem": st.column_config.NumberColumn(
-                    "Ordem na disciplina",
-                    min_value=1,
-                    step=1,
-                    help="Sequência só desta disciplina. Cada disciplina tem o próprio 1, 2, 3…",
-                ),
-            },
-            column_order=[c for c in COLUNAS_CICLOS if c in df_edit.columns],
-            num_rows="dynamic",
-            width="stretch",
-            hide_index=True,
-            key=editor_key,
-        )
-        salvar = st.form_submit_button("Salvar ciclos", type="primary", width="stretch")
+    st.caption(
+        "Edite as células (clique fora da data para confirmar) e depois em **Salvar ciclos**. "
+        "Sobreposição de janelas de pares gera aviso — a gravação não é bloqueada."
+    )
 
-    if salvar:
-        df_save = _montar_df_salvar_ciclos(st.session_state[chave], edited, filtro)
-        erro = salvar_ciclos(df_save)
+    edited = st.data_editor(
+        st.session_state[work_key],
+        column_config={
+            "ID_Ciclo": st.column_config.TextColumn("ID do ciclo", required=True),
+            "Nome_Ciclo": st.column_config.TextColumn("Nome", required=True),
+            "ID_Disciplina": st.column_config.SelectboxColumn(
+                "Disciplina", options=ids_disc, required=True
+            ),
+            "Data_Inicio_Ciclo": st.column_config.DateColumn(
+                "Início do ciclo",
+                format="DD/MM/YYYY",
+                help="Primeiro dia acadêmico deste ciclo (dailies e anotações).",
+            ),
+            "Data_Apresentacao": st.column_config.DateColumn(
+                "Apresentação de projeto",
+                format="DD/MM/YYYY",
+                help="Término acadêmico do ciclo; em geral a segunda da apresentação.",
+            ),
+            "Data início": st.column_config.DateColumn(
+                "Abertura das pares",
+                format="DD/MM/YYYY",
+                help="Quando o aluno pode começar a avaliação de pares.",
+            ),
+            "Data fim": st.column_config.DateColumn(
+                "Encerramento das pares",
+                format="DD/MM/YYYY",
+                help="Último dia da avaliação de pares.",
+            ),
+            "Status": st.column_config.SelectboxColumn(
+                "Status",
+                options=STATUS_OPCOES,
+                required=True,
+                help="inativo = kill-switch (fecha pares mesmo com datas abertas).",
+            ),
+            "Ordem": st.column_config.NumberColumn(
+                "Ordem na disciplina",
+                min_value=1,
+                step=1,
+                help="Sequência só desta disciplina. Em overlap de janelas, o aluno vê a maior Ordem.",
+            ),
+        },
+        column_order=[c for c in COLUNAS_CICLOS if c in df_edit.columns],
+        num_rows="dynamic",
+        width="stretch",
+        hide_index=True,
+        key=editor_key,
+    )
+
+    from domain.ciclos import overlaps_janelas_pares
+
+    df_preview = _montar_df_salvar_ciclos(st.session_state[chave], edited, filtro)
+    for aviso in overlaps_janelas_pares(df_preview):
+        st.warning(aviso)
+
+    if st.button("Salvar ciclos", type="primary", width="stretch", key="cad_ciclos_salvar_btn"):
+        # Garante que o que está na grade (não um snapshot antigo) vá para a planilha.
+        st.session_state[work_key] = normalizar_df_ciclos_editor(edited)
+        avisos_overlap = overlaps_janelas_pares(df_preview)
+        erro = salvar_ciclos(df_preview)
         if erro:
             st.error(erro)
         else:
@@ -546,6 +568,8 @@ def render_ciclos(usuario: dict):
             st.session_state[chave] = carregar_ciclos()
             st.session_state[ver_ed] = int(st.session_state[ver_ed]) + 1
             _reset_data_editor_widget(editor_key)
+            st.session_state.pop(work_key, None)
+            st.session_state["cad_ciclos_avisos_overlap"] = avisos_overlap
             st.success("Ciclos salvos na planilha.")
             st.rerun()
 

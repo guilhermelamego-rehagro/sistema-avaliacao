@@ -104,8 +104,12 @@ def render(usuario: dict, id_disciplina: str, alunos: pd.DataFrame):
     salas = ordenar_grupos_lista(alunos["Sala"].dropna().astype(str).unique().tolist())
     sala_pref = sala_padrao_orientador(usuario, id_disc)
     chave_sala = f"daily_nota_sala_{id_disc}"
-    if chave_sala not in st.session_state and sala_pref in salas:
-        st.session_state[chave_sala] = sala_pref
+    ult_sala = f"daily_nota_ult_sala_{id_disc}"
+    ult_grupo = f"daily_nota_ult_grupo_{id_disc}"
+    if chave_sala not in st.session_state:
+        candidato = st.session_state.get(ult_sala) or sala_pref
+        if candidato in salas:
+            st.session_state[chave_sala] = candidato
     sala = selectbox_sala(
         "Sala:",
         salas,
@@ -113,12 +117,19 @@ def render(usuario: dict, id_disciplina: str, alunos: pd.DataFrame):
         usuario=usuario,
         incluir_todas=False,
     )
+    if sala:
+        st.session_state[ult_sala] = sala
 
     grupos = _grupos_da_sala(alunos, sala)
     if not grupos:
         st.warning("Nenhum grupo nesta sala.")
         return
-    grupo = st.selectbox("Grupo:", grupos, key=f"daily_nota_grupo_{id_disc}_{sala}")
+    chave_grupo = f"daily_nota_grupo_{id_disc}_{sala}"
+    if chave_grupo not in st.session_state or st.session_state.get(chave_grupo) not in grupos:
+        candidato_g = st.session_state.get(ult_grupo)
+        st.session_state[chave_grupo] = candidato_g if candidato_g in grupos else grupos[0]
+    grupo = st.selectbox("Grupo:", grupos, key=chave_grupo)
+    st.session_state[ult_grupo] = grupo
 
     id_ciclo, nome_ciclo = ciclo_na_data(id_disc, dia)
     if nome_ciclo:

@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from config import ABAS_AVALIACAO
-from data.sheets import garantir_aba_avaliacao, ler_aba, salvar_aba
+from data.sheets import garantir_aba_avaliacao, ler_aba, limpar_cache_planilhas, salvar_aba
 from domain.ciclos import ciclo_na_data, hoje_normalizado
 from utils.datas import parse_data_planilha, parse_data_planilha_series
 from utils.disciplina import normalizar_id
@@ -60,16 +60,7 @@ def _agora() -> str:
     return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
 
 
-def carregar_anotacoes(*, usuario: dict | None = None) -> pd.DataFrame:
-    if usuario is not None:
-        erro = assert_acesso_docente(usuario)
-        if erro:
-            return pd.DataFrame(columns=COLUNAS)
-    garantir_aba_avaliacao(ABA)
-    try:
-        df = ler_aba(ABA)
-    except Exception:
-        df = pd.DataFrame()
+def _normalizar_anotacoes(df: pd.DataFrame | None) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=COLUNAS)
     out = df.copy()
@@ -83,13 +74,47 @@ def carregar_anotacoes(*, usuario: dict | None = None) -> pd.DataFrame:
     out["Grupo"] = out["Grupo"].astype(str).str.strip()
     out["Texto"] = out["Texto"].astype(str).replace({"nan": "", "None": ""}).str.strip()
     out["Email_Orientador"] = (
-        out["Email_Orientador"].astype(str).str.strip().str.lower().replace({"nan": "", "none": ""})
+        out["Email_Orientador"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .replace({"nan": "", "none": ""})
     )
     out["Nome_Orientador"] = (
-        out["Nome_Orientador"].astype(str).str.strip().replace({"nan": "", "None": ""})
+        out["Nome_Orientador"]
+        .astype(str)
+        .str.strip()
+        .replace({"nan": "", "None": ""})
     )
     out["Data"] = out["Data"].map(_fmt_data)
     return out[COLUNAS]
+
+
+def _carregar_anotacoes_sheets() -> pd.DataFrame:
+    garantir_aba_avaliacao(ABA)
+    try:
+        df = ler_aba(ABA)
+    except Exception:
+        df = pd.DataFrame()
+    return _normalizar_anotacoes(df)
+
+
+def carregar_anotacoes(*, usuario: dict | None = None) -> pd.DataFrame:
+    if usuario is not None:
+        erro = assert_acesso_docente(usuario)
+        if erro:
+            return pd.DataFrame(columns=COLUNAS)
+    try:
+        from auth.supabase_auth import ambiente_app
+        from data.supabase_operacional import listar_anotacoes
+
+        if ambiente_app() == "teste":
+            # Resultado vazio também é válido: Supabase é a fonte preferencial
+            # após a carga inicial; Sheets fica como fallback de indisponibilidade.
+            return _normalizar_anotacoes(listar_anotacoes())
+    except Exception:
+        pass
+    return _carregar_anotacoes_sheets()
 
 
 def autor_rotulo(row: dict | pd.Series) -> str:
@@ -200,7 +225,33 @@ def salvar_anotacao(
         "Nome_Orientador": nome_autor,
         "Data_Atualizacao": _agora(),
     }
-    df = carregar_anotacoes(usuario=usuario)
+    try:
+        from auth.supabase_auth import ambiente_app
+        from data.supabase_operacional import (
+            OperacionalIndisponivel,
+            salvar_anotacao as salvar_anotacao_operacional,
+        )
+    except Exception:
+        ambiente_app = lambda: "producao"  # type: ignore[assignment]
+        OperacionalIndisponivel = RuntimeError  # type: ignore[assignment,misc]
+        salvar_anotacao_operacional = None  # type: ignore[assignment]
+
+    if ambiente_app() == "teste" and salvar_anotacao_operacional is not None:
+        try:
+            salvar_anotacao_operacional(nova)
+            # A chave lógica Data|Disciplina|Sala|Grupo torna este espelho
+            # idempotente: atualiza a linha existente em vez de duplicá-la.
+            try:
+                _salvar_anotacao_sheets(nova)
+            except Exception:
+                # A anotação já está segura no Supabase; nunca fazer fallback
+                # automático depois de uma gravação bem-sucedida.
+                pass
+            return None
+        except OperacionalIndisponivel:
+            pass
+
+    df = _carregar_anotacoes_sheets()
     if df.empty:
         out = pd.DataFrame([nova], columns=COLUNAS)
     else:
@@ -221,6 +272,30 @@ def salvar_anotacao(
     out = out.drop(columns=["_ord"])
     salvar_aba(ABA, out, COLUNAS)
     return None
+
+
+def _salvar_anotacao_sheets(nova: dict[str, str]) -> None:
+    """Espelha uma anotação no Sheets sem criar duplicata lógica."""
+    df = _carregar_anotacoes_sheets()
+    if df.empty:
+        out = pd.DataFrame([nova], columns=COLUNAS)
+    else:
+        mask = (
+            (df["Data"] == nova["Data"])
+            & (df["ID_Disciplina"] == nova["ID_Disciplina"])
+            & (df["Sala"] == nova["Sala"])
+            & (df["Grupo"] == nova["Grupo"])
+        )
+        if mask.any():
+            for col, valor in nova.items():
+                df.loc[mask, col] = valor
+            out = df
+        else:
+            out = pd.concat([df, pd.DataFrame([nova])], ignore_index=True)
+    parsed = parse_data_planilha_series(out["Data"])
+    out = out.assign(_ord=parsed).sort_values(["ID_Disciplina", "_ord", "Sala", "Grupo"])
+    salvar_aba(ABA, out.drop(columns=["_ord"]), COLUNAS)
+    limpar_cache_planilhas()
 
 
 def anotacoes_do_grupo(

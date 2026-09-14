@@ -17,6 +17,11 @@ from auth.supabase_auth import (
     usuario_e_coordenador,
     validar_senha,
 )
+from auth.impersonacao import (
+    bloqueia_escrita_aluno,
+    render_banner_impersonacao,
+    usuario_ator,
+)
 from data.sheets import (
     ler_aba,
     ler_aba_frequencia,
@@ -26,8 +31,16 @@ from data.sheets import (
 )
 from domain.ciclos import hoje_normalizado, indice_ciclo_padrao, obter_disciplina_ativa
 from domain.encontro_presencial import escolher_ciclo_aberto
+from domain.liberacoes_pares import ciclo_pares_para_aluno, marcar_liberacao_usada
 from domain.notas import calcular_nota_pares
+from domain.pares import (
+    atualizar_moderacao,
+    aluno_ja_enviou_pares,
+    carregar_avaliacoes_pares,
+    enviar_avaliacoes_pares,
+)
 from domain.presenca import calcular_matriz_dailies, calcular_matriz_presencas, carregar_base_presenca
+
 from utils.disciplina import normalizar_id
 from utils.logs import registrar_log, registrar_log_acesso
 from navigation import (
@@ -39,6 +52,9 @@ from navigation import (
     ROTA_COORD_DISCIPLINAS,
     ROTA_COORD_PLANEJAMENTO,
     ROTA_COORD_PROFESSORES,
+    ROTA_ALUNOS_FICHA,
+    ROTA_FORMACAO_GRUPOS,
+    ROTA_MATRICULAS_OFERTA,
     ROTA_CURSO_AVALIAR,
     ROTA_FREQ_AULAS,
     ROTA_FREQ_CONTROLE,
@@ -52,6 +68,7 @@ from navigation import (
     ROTA_ANOTACOES_DAILY,
     ROTA_ORDEM_APRESENTACAO,
     ROTA_LIBERAR_NOTAS,
+    ROTA_DASHBOARD_CURSO,
     ROTA_MINHAS_NOTAS,
     ROTA_AVALIACAO_GRUPO_ALUNO,
     ROTA_MODERACAO,
@@ -65,7 +82,7 @@ from navigation import (
 )
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_anotacoes_daily, prof_cadastros, prof_calendario, prof_controle_presenca, prof_liberacao_notas, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
+from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 from utils.ordenacao import ordenar_grupos_lista
 
@@ -174,16 +191,29 @@ if not st.session_state["usuario_logado"]:
                     )
                 else:
                     tipo_recup, msg_recup = resultado
+                    email_log = (email_recup or "").strip().lower()
                     if tipo_recup == "erro":
                         st.error(
                             msg_recup or "Não foi possível solicitar a redefinição."
                         )
                     elif tipo_recup == "senha_temporaria":
+                        if email_log:
+                            registrar_log(
+                                email_log,
+                                email_log,
+                                "Solicitou recuperação (senha temporária)",
+                            )
                         st.session_state["_recup_senha_tmp"] = (
                             msg_recup or "rehagro2026"
                         ).strip()
                         st.rerun()
                     else:
+                        if email_log:
+                            registrar_log(
+                                email_log,
+                                email_log,
+                                "Solicitou recuperação de senha",
+                            )
                         st.success(
                             "Se o e-mail estiver cadastrado, enviamos um link para "
                             "redefinir a senha. Verifique a caixa de entrada e o spam."
@@ -225,6 +255,13 @@ if not st.session_state["usuario_logado"]:
                     with st.spinner("Autenticando..."):
                         usuario, erro = fazer_login(email_input, senha_input)
                     if erro:
+                        email_tentativa = (email_input or "").strip().lower()
+                        if email_tentativa:
+                            registrar_log(
+                                email_tentativa,
+                                email_tentativa,
+                                "Falha de login",
+                            )
                         st.error(erro)
                     else:
                         registrar_log(
@@ -302,12 +339,17 @@ else:
         )
         st.session_state.pop("_planilhas_aviso", None)
 
+    ator = usuario_ator() or aluno
     st.sidebar.write(f"**{aluno['nome']}**")
-    st.sidebar.caption(f"{aluno['email']} · {perfil}")
-    if usuario_e_coordenador(aluno):
+    if aluno.get("_impersonado"):
+        st.sidebar.caption(f"{aluno['email']} · visão do aluno")
+        st.sidebar.caption(f"Ator: {ator.get('nome')} · {ator.get('perfil')}")
+    else:
+        st.sidebar.caption(f"{aluno['email']} · {perfil}")
+    if usuario_e_coordenador(ator) and not aluno.get("_impersonado"):
         st.sidebar.caption("Função: **Coordenador**")
     if st.sidebar.button("Sair", width="stretch"):
-        registrar_log(aluno["email"], aluno["nome"], "Logout")
+        registrar_log(ator["email"], ator["nome"], "Logout")
         fazer_logout()
         st.rerun()
 
@@ -315,6 +357,7 @@ else:
         st.session_state["escolha_menu"] = LEGACY_ROUTES[st.session_state["escolha_menu"]]
 
     menu = renderizar_sidebar(aluno, perfil)
+    render_banner_impersonacao()
 
     hoje = hoje_normalizado()
 
@@ -330,7 +373,7 @@ else:
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
         df_entrancia = ler_aba("Entrancia_Turma")
-        df_aval = ler_aba("Avaliacoes")
+        df_aval = carregar_avaliacoes_pares()
         
         disc_ativa = df_disc[df_disc['Status'].str.lower() == 'ativo']
         if disc_ativa.empty:
@@ -341,7 +384,9 @@ else:
         nome_disc = str(disc_ativa.iloc[0]['Nome_Disciplina']).strip()
         
         ciclos_disc = df_ciclos[df_ciclos['ID_Disciplina'].astype(str).str.strip() == id_disc]
-        ciclo_ativo = escolher_ciclo_aberto(ciclos_disc, id_disc)
+        ciclo_ativo, liberacao_exc = ciclo_pares_para_aluno(
+            aluno["email"], ciclos_disc, id_disc
+        )
         
         if ciclo_ativo is None:
             st.warning("Não há nenhum ciclo de avaliação aberto para você hoje.")
@@ -350,9 +395,11 @@ else:
         id_ciclo = str(ciclo_ativo['ID_Ciclo']).strip()
         nome_ciclo = str(ciclo_ativo['Nome_Ciclo']).strip()
         
-        ja_avaliou = not df_aval[(df_aval['ID_Ciclo'].astype(str).str.strip() == id_ciclo) & 
-                                 (df_aval['Email_Avaliador'].astype(str).str.lower().str.strip() == aluno['email'])].empty
-        if ja_avaliou:
+        ja_enviou = aluno_ja_enviou_pares(id_ciclo, aluno["email"], df_aval)
+        permite_reenvio = bool(
+            liberacao_exc and str(liberacao_exc.get("Modo", "")).strip() == "reenvio"
+        )
+        if ja_enviou and not permite_reenvio:
             st.success(f"Você já enviou suas avaliações de pares para o **{nome_ciclo}**! Obrigado.")
             st.stop()
             
@@ -363,11 +410,27 @@ else:
             st.stop()
             
         meu_grupo = str(meu_vinculo.iloc[0]['Grupo'])
-        colegas = df_entrancia[(df_entrancia['Grupo'].astype(str) == meu_grupo) & 
-                               (df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc) & 
-                               (df_entrancia['Email_Pessoal'].str.lower().str.strip() != aluno['email'])]
+        from domain.filtros_operacionais import filtrar_entrancia_operacional
+
+        entrancia_pares = filtrar_entrancia_operacional(
+            df_entrancia[df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc],
+            id_disc,
+            exigir_grupo=True,
+        )
+        colegas = entrancia_pares[(entrancia_pares['Grupo'].astype(str) == meu_grupo) & 
+                               (entrancia_pares['Email_Pessoal'].str.lower().str.strip() != aluno['email'])]
 
         st.info(f"**Disciplina:** {nome_disc} | **Avaliação:** {nome_ciclo} | **Seu Grupo:** {meu_grupo}")
+        if liberacao_exc:
+            st.warning(
+                f"Liberação excepcional do **{nome_ciclo}** "
+                f"até `{liberacao_exc.get('Valido_Ate', '')}` "
+                f"({liberacao_exc.get('Modo', '')})."
+            )
+        if ja_enviou and permite_reenvio:
+            st.info("Modo reenvio: suas notas anteriores deste ciclo serão substituídas ao enviar.")
+        if bloqueia_escrita_aluno():
+            st.info("Modo visualização: o envio da avaliação de pares está desabilitado.")
         if colegas.empty:
             st.warning("Não há outros colegas registrados no seu grupo para avaliar.")
             st.stop()
@@ -383,24 +446,58 @@ else:
                 
                 respostas_pares[colega['Email_Pessoal']] = {"nome": colega['Nome_Completo'], "nota": nota, "coment": coment}
 
-            if st.form_submit_button("Enviar Avaliação de Pares", type="primary", width="stretch"):
-                notas_vazias = [d['nome'] for d in respostas_pares.values() if d['nota'] is None]
-                if notas_vazias:
-                    st.error("⚠️ Por favor, selecione uma nota para todos os colegas antes de enviar.")
+            enviar_pares = st.form_submit_button(
+                "Enviar Avaliação de Pares",
+                type="primary",
+                width="stretch",
+                disabled=bloqueia_escrita_aluno()
+                or bool(st.session_state.get(f"_lock_pares_{aluno['email']}_{id_ciclo}")),
+            )
+            if enviar_pares:
+                if bloqueia_escrita_aluno():
+                    st.error("Modo visualização: não é possível enviar avaliação em nome do aluno.")
                 else:
-                    with st.spinner("Salvando notas..."):
-                        aba_avaliacoes = planilha.worksheet("Avaliacoes")
-                        dados_inserir = []
-                        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
-                        for email_aval, d in respostas_pares.items():
-                            dados_inserir.append([agora, id_ciclo, nome_disc, nome_ciclo, email_aval, d['nome'], meu_grupo, d['nota'], aluno['email'], aluno['nome'], d['coment'], "", ""])
-                        aba_avaliacoes.append_rows(dados_inserir)
-                        registrar_log(aluno['email'], aluno['nome'], f"Enviou avaliação pares - {nome_ciclo}")
-                        
-                        limpar_cache_planilhas()
-                        st.session_state["escolha_menu"] = ROTA_CURSO_AVALIAR
-                        st.session_state["sucesso_redirecionamento"] = f"✅ Suas avaliações de pares para o **{nome_ciclo}** foram salvas! Por favor, responda agora à Avaliação do Curso abaixo."
-                        st.rerun()
+                    lock_pares = f"_lock_pares_{aluno['email']}_{id_ciclo}"
+                    notas_vazias = [d["nome"] for d in respostas_pares.values() if d["nota"] is None]
+                    if notas_vazias:
+                        st.error("⚠️ Por favor, selecione uma nota para todos os colegas antes de enviar.")
+                    elif st.session_state.get(lock_pares):
+                        st.info("Envio já em andamento ou concluído. Aguarde…")
+                    else:
+                        st.session_state[lock_pares] = True
+                        with st.spinner("Salvando notas..."):
+                            status_envio, msg_erro = enviar_avaliacoes_pares(
+                                id_ciclo=id_ciclo,
+                                disciplina=nome_disc,
+                                ciclo=nome_ciclo,
+                                grupo=meu_grupo,
+                                email_avaliador=aluno["email"],
+                                nome_avaliador=aluno["nome"],
+                                respostas=respostas_pares,
+                                permitir_reenvio=permite_reenvio,
+                            )
+                            if status_envio == "ja_enviou":
+                                st.success(
+                                    f"Você já enviou suas avaliações de pares para o **{nome_ciclo}**! Obrigado."
+                                )
+                                st.rerun()
+                            if status_envio == "erro":
+                                st.session_state.pop(lock_pares, None)
+                                st.error(msg_erro or "Não foi possível salvar as avaliações.")
+                            else:
+                                if liberacao_exc and liberacao_exc.get("ID"):
+                                    marcar_liberacao_usada(str(liberacao_exc["ID"]))
+                                registrar_log(
+                                    aluno["email"],
+                                    aluno["nome"],
+                                    f"Enviou avaliação pares - {nome_ciclo}",
+                                )
+                                st.session_state["escolha_menu"] = ROTA_CURSO_AVALIAR
+                                st.session_state["sucesso_redirecionamento"] = (
+                                    f"✅ Suas avaliações de pares para o **{nome_ciclo}** foram salvas! "
+                                    "Por favor, responda agora à Avaliação do Curso abaixo."
+                                )
+                                st.rerun()
 
     # ------------------------------------------
     # MÓDULO 2: AVALIAÇÃO DO CURSO
@@ -455,6 +552,8 @@ else:
             professores.append(str(row['Professor']).strip())
 
         st.info(f"**Avaliação:** {nome_ciclo} | **Disciplina:** {nome_disc}")
+        if bloqueia_escrita_aluno():
+            st.info("Modo visualização: o envio da avaliação do curso está desabilitado.")
         
         with st.form("form_curso"):
             st.write("**Métricas Gerais (0 a 5)**")
@@ -478,32 +577,105 @@ else:
             que_pena = st.text_area("Que Pena que... (Opcional)")
             que_tal = st.text_area("Que Tal se... (Opcional)")
             
-            if st.form_submit_button("Enviar Avaliação do Curso", type="primary", width="stretch"):
-                valores_gerais = [ae, av, ap, su]
-                valores_prof = list(notas_prof.values())
-                
-                if None in valores_gerais or None in valores_prof:
-                    st.error("⚠️ Por favor, avalie todas as métricas e professores antes de enviar.")
+            enviar_curso = st.form_submit_button(
+                "Enviar Avaliação do Curso",
+                type="primary",
+                width="stretch",
+                disabled=bloqueia_escrita_aluno()
+                or bool(st.session_state.get(f"_lock_curso_{aluno['email']}_{id_ciclo}")),
+            )
+            if enviar_curso:
+                if bloqueia_escrita_aluno():
+                    st.error("Modo visualização: não é possível enviar avaliação em nome do aluno.")
                 else:
-                    with st.spinner("Salvando avaliação..."):
-                        aba_resp = planilha.worksheet("Respostas_Curso")
-                        agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
-                        linhas = []
-                        
-                        itens_gerais = [("Auto Estudo", ae), ("Aulas ao Vivo", av), ("Aplicabilidade", ap), ("Suporte", su), 
-                                        ("NPS", nps), ("Que Bom", que_bom), ("Que Pena", que_pena), ("Que Tal", que_tal)]
-                        for item, val in itens_gerais:
-                            linhas.append([agora, aluno['email'], aluno['nome'], nome_disc, nome_ciclo, id_ciclo, item, "", val])
-                        
-                        for p, val in notas_prof.items():
-                            linhas.append([agora, aluno['email'], aluno['nome'], nome_disc, nome_ciclo, id_ciclo, "Didática Professor", p, val])
-                            
-                        aba_resp.append_rows(linhas)
-                        registrar_log(aluno['email'], aluno['nome'], f"Enviou avaliação curso - {nome_ciclo}")
-                        
-                        limpar_cache_planilhas()
-                        st.success("✅ Avaliação do curso salva!")
-                        st.rerun()
+                    lock_curso = f"_lock_curso_{aluno['email']}_{id_ciclo}"
+                    valores_gerais = [ae, av, ap, su]
+                    valores_prof = list(notas_prof.values())
+
+                    if None in valores_gerais or None in valores_prof:
+                        st.error("⚠️ Por favor, avalie todas as métricas e professores antes de enviar.")
+                    elif st.session_state.get(lock_curso):
+                        st.info("Envio já em andamento ou concluído. Aguarde…")
+                    else:
+                        # Trava imediata contra clique duplo (duas requisições quase simultâneas).
+                        st.session_state[lock_curso] = True
+                        with st.spinner("Salvando avaliação..."):
+                            limpar_cache_planilhas()
+                            df_check = ler_aba("Respostas_Curso")
+                            ja_no_sheet = (
+                                not df_check.empty
+                                and not df_check[
+                                    (df_check["ID do Ciclo"].astype(str).str.strip() == id_ciclo)
+                                    & (
+                                        df_check["Email do Aluno"]
+                                        .astype(str)
+                                        .str.lower()
+                                        .str.strip()
+                                        == aluno["email"]
+                                    )
+                                ].empty
+                            )
+                            if ja_no_sheet:
+                                st.success(
+                                    f"Você já enviou sua avaliação de curso para o **{nome_ciclo}**. Obrigado!"
+                                )
+                                st.rerun()
+
+                            aba_resp = planilha.worksheet("Respostas_Curso")
+                            agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime(
+                                "%d/%m/%Y %H:%M:%S"
+                            )
+                            linhas = []
+
+                            itens_gerais = [
+                                ("Auto Estudo", ae),
+                                ("Aulas ao Vivo", av),
+                                ("Aplicabilidade", ap),
+                                ("Suporte", su),
+                                ("NPS", nps),
+                                ("Que Bom", que_bom),
+                                ("Que Pena", que_pena),
+                                ("Que Tal", que_tal),
+                            ]
+                            for item, val in itens_gerais:
+                                linhas.append(
+                                    [
+                                        agora,
+                                        aluno["email"],
+                                        aluno["nome"],
+                                        nome_disc,
+                                        nome_ciclo,
+                                        id_ciclo,
+                                        item,
+                                        "",
+                                        val,
+                                    ]
+                                )
+
+                            for p, val in notas_prof.items():
+                                linhas.append(
+                                    [
+                                        agora,
+                                        aluno["email"],
+                                        aluno["nome"],
+                                        nome_disc,
+                                        nome_ciclo,
+                                        id_ciclo,
+                                        "Didática Professor",
+                                        p,
+                                        val,
+                                    ]
+                                )
+
+                            aba_resp.append_rows(linhas)
+                            registrar_log(
+                                aluno["email"],
+                                aluno["nome"],
+                                f"Enviou avaliação curso - {nome_ciclo}",
+                            )
+                            limpar_cache_planilhas()
+                            st.success("✅ Avaliação do curso salva!")
+                            st.rerun()
 
     # ------------------------------------------
     # MÓDULO 3: MEUS RESULTADOS (BOLETIM)
@@ -513,7 +685,7 @@ else:
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
-        df_aval = ler_aba("Avaliacoes")
+        df_aval = carregar_avaliacoes_pares()
         
         disc_ativa = df_disc[df_disc['Status'].str.lower() == 'ativo']
         if disc_ativa.empty:
@@ -523,14 +695,15 @@ else:
         nome_disc = str(disc_ativa.iloc[0]['Nome_Disciplina']).strip()
         
         ciclos_disc = df_ciclos[df_ciclos['ID_Disciplina'].astype(str).str.strip() == id_disc]
-        ciclo_ativo_hoje = escolher_ciclo_aberto(ciclos_disc, id_disc)
+        ciclo_ativo_hoje, _lib_boletim = ciclo_pares_para_aluno(
+            aluno["email"], ciclos_disc, id_disc
+        )
         
         if ciclo_ativo_hoje is not None:
             id_ativo = str(ciclo_ativo_hoje['ID_Ciclo']).strip()
             nome_ativo = str(ciclo_ativo_hoje['Nome_Ciclo']).strip()
             
-            votou_ativo = not df_aval[(df_aval['ID_Ciclo'].astype(str).str.strip() == id_ativo) & 
-                                      (df_aval['Email_Avaliador'].str.lower().str.strip() == aluno['email'])].empty
+            votou_ativo = aluno_ja_enviou_pares(id_ativo, aluno["email"], df_aval)
             
             if not votou_ativo:
                 registrar_log(aluno['email'], aluno['nome'], f"Acesso bloqueado boletim ({nome_ativo})")
@@ -600,13 +773,16 @@ else:
     # ------------------------------------------
     # MÓDULO DO PROFESSOR: PAINEL GERAL
     # ------------------------------------------
-    elif menu == ROTA_PARES_ACOMP and perfil == "Professor" and professor_e_orientador(aluno):
+    elif menu == ROTA_PARES_ACOMP and perfil == "Professor" and (
+        professor_e_orientador(aluno)
+        or (usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+    ):
         st.header("Avaliação de pares")
         
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
         df_entrancia = ler_aba("Entrancia_Turma")
-        df_aval = ler_aba("Avaliacoes")
+        df_aval = carregar_avaliacoes_pares()
         
         lista_disciplinas = df_disc['Nome_Disciplina'].unique().tolist()
         idx_padrao_disc = 0 
@@ -647,6 +823,11 @@ else:
         # FILTROS ADICIONAIS (SALA, GRUPO, NOME)
         # ---------------------------------------------------------
         entrancia_disc = df_entrancia[df_entrancia['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
+        from domain.filtros_operacionais import filtrar_entrancia_operacional
+
+        entrancia_disc = filtrar_entrancia_operacional(
+            entrancia_disc, id_disc_sel, exigir_grupo=True
+        )
         salas_pares = sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
         f1, f2 = st.columns(2)
         with f1:
@@ -808,7 +989,13 @@ else:
                     data=buffer_res.getvalue(),
                     file_name=f"resultados_{ciclo_sel}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ) 
+                )
+
+        if usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+            from views import prof_liberacao_pares
+
+            prof_liberacao_pares.render_painel(aluno)
+
     # =========================================================
     # MÓDULO DO PROFESSOR: MODERAÇÃO DE COMENTÁRIOS
     # =========================================================
@@ -819,9 +1006,7 @@ else:
         df_disc = ler_aba("Disciplinas")
         df_ciclos = ler_aba("Ciclos")
         df_turmas = ler_aba("Entrancia_Turma")
-        df_aval = ler_aba("Avaliacoes")
-        
-        df_aval['Linha_Planilha'] = df_aval.index + 2
+        df_aval = carregar_avaliacoes_pares()
 
         lista_disciplinas = df_disc['Nome_Disciplina'].unique().tolist()
         idx_padrao_disc = 0 
@@ -862,6 +1047,11 @@ else:
         
         with c_filt3:
             entrancia_disc = df_turmas[df_turmas['ID_Disciplina'].astype(str).str.strip() == id_disc_sel]
+            from domain.filtros_operacionais import filtrar_entrancia_operacional
+
+            entrancia_disc = filtrar_entrancia_operacional(
+                entrancia_disc, id_disc_sel, exigir_grupo=False
+            )
             salas_disponiveis = sorted(entrancia_disc['Sala'].dropna().unique().astype(str).tolist())
             sala_sel = selectbox_sala(
                 "Filtrar por Sala:",
@@ -871,13 +1061,11 @@ else:
             )
             
         with c_filt4:
-            def chave_ordenacao_grupo(x):
-                try:
-                    return (0, float(x))
-                except ValueError:
-                    return (1, str(x))
+            from utils.ordenacao import ordenar_grupos_lista
 
-            lista_grupos_ordenada = sorted(entrancia_disc['Grupo'].dropna().unique().astype(str).tolist(), key=chave_ordenacao_grupo)
+            lista_grupos_ordenada = ordenar_grupos_lista(
+                entrancia_disc["Grupo"].dropna().unique().astype(str).tolist()
+            )
             grupos_disponiveis = ["Todos"] + lista_grupos_ordenada
             grupo_sel = st.selectbox("Filtrar por Grupo:", grupos_disponiveis, key="mod_grupo_sel")
 
@@ -929,7 +1117,7 @@ else:
                 st.warning("Nenhum comentário corresponde aos filtros aplicados.")
             else:
                 for idx, row in df_comentarios.iterrows():
-                    linha_real_gspread = int(row['Linha_Planilha'])
+                    chave_mod = str(row.get("chave_origem") or "").strip()
                     status_atual = str(row.get('Moderação', '')).strip().lower()
                     is_ignorado = (status_atual == 'ignorar')
                     
@@ -939,6 +1127,10 @@ else:
                     avaliador = str(row.get('Nome', row.get('Nome_Avaliador', 'Avaliador')))
                     avaliado = str(row.get('Nome_Avaliado', 'Avaliado'))
                     comentario_texto = str(row.get('Comentário', ''))
+                    email_avaliador_row = str(row.get("Email_Avaliador", "")).strip().lower()
+                    email_avaliado_row = str(row.get("Email_Avaliado", "")).strip().lower()
+                    id_ciclo_row = str(row.get("ID_Ciclo", "")).strip()
+                    chave_btn = chave_mod or f"{id_ciclo_row}|{email_avaliador_row}|{email_avaliado_row}|{idx}"
                     
                     with st.container():
                         col_corpo, col_acao = st.columns([4, 1])
@@ -950,22 +1142,36 @@ else:
                         with col_acao:
                             if is_ignorado:
                                 st.error("🚫 Ocultado")
-                                if st.button("🔄 Aprovar", key=f"btn_aprov_{linha_real_gspread}", width="stretch"):
+                                if st.button("🔄 Aprovar", key=f"btn_aprov_{chave_btn}", width="stretch"):
                                     with st.spinner("Atualizando..."):
-                                        aba_real = planilha.worksheet("Avaliacoes")
-                                        aba_real.update_cell(linha_real_gspread, 13, "Aprovado")
-                                        limpar_cache_planilhas()
-                                        st.toast("Status alterado para Aprovado!")
-                                        st.rerun()
+                                        erro_mod = atualizar_moderacao(
+                                            status="Aprovado",
+                                            chave_origem=chave_mod,
+                                            id_ciclo=id_ciclo_row,
+                                            email_avaliador=email_avaliador_row,
+                                            email_avaliado=email_avaliado_row,
+                                        )
+                                        if erro_mod:
+                                            st.error(erro_mod)
+                                        else:
+                                            st.toast("Status alterado para Aprovado!")
+                                            st.rerun()
                             else:
                                 st.success("✅ Visível")
-                                if st.button("🗑️ Ignorar", key=f"btn_ign_{linha_real_gspread}", width="stretch"):
+                                if st.button("🗑️ Ignorar", key=f"btn_ign_{chave_btn}", width="stretch"):
                                     with st.spinner("Atualizando..."):
-                                        aba_real = planilha.worksheet("Avaliacoes")
-                                        aba_real.update_cell(linha_real_gspread, 13, "Ignorar")
-                                        limpar_cache_planilhas()
-                                        st.toast("Status alterado para Ignorar!")
-                                        st.rerun()
+                                        erro_mod = atualizar_moderacao(
+                                            status="Ignorar",
+                                            chave_origem=chave_mod,
+                                            id_ciclo=id_ciclo_row,
+                                            email_avaliador=email_avaliador_row,
+                                            email_avaliado=email_avaliado_row,
+                                        )
+                                        if erro_mod:
+                                            st.error(erro_mod)
+                                        else:
+                                            st.toast("Status alterado para Ignorar!")
+                                            st.rerun()
                                         
                     st.markdown("<hr style='margin: 0.5em 0px; border-color: rgba(49, 51, 63, 0.2);'>", unsafe_allow_html=True)
                    
@@ -1178,6 +1384,21 @@ else:
     elif menu == ROTA_COORD_PLANEJAMENTO and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_planejamento.render(aluno)
 
+    elif menu == ROTA_ALUNOS_FICHA and (
+        (perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+        or perfil == "Secretaria"
+    ):
+        prof_alunos_ficha.render(aluno)
+
+    elif menu == ROTA_FORMACAO_GRUPOS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_formacao_grupos.render(aluno)
+
+    elif menu == ROTA_MATRICULAS_OFERTA and (
+        (perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+        or perfil == "Secretaria"
+    ):
+        prof_matriculas_oferta.render(aluno)
+
     elif menu == ROTA_COORD_CICLOS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_cadastros.render_ciclos(aluno)
 
@@ -1189,6 +1410,9 @@ else:
     # =========================================================
     elif menu == ROTA_COORD_CONFERIR and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_coordenador_entregas.render(aluno)
+
+    elif menu == ROTA_DASHBOARD_CURSO and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+        prof_dashboard_curso.render(aluno)
 
     # =========================================================
     # MÓDULO PROFESSOR: AVALIAÇÃO DO ORIENTADOR
@@ -1206,7 +1430,14 @@ else:
         professor_e_orientador(aluno)
         or (usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
     ):
-        prof_anotacoes_daily.render_pagina(aluno)
+        # Nunca disponível a alunos (nem via impersonação — persona já é Aluno).
+        from domain.anotacoes_daily import assert_acesso_docente
+
+        bloqueio_anot = assert_acesso_docente(aluno)
+        if bloqueio_anot:
+            st.error(bloqueio_anot)
+        else:
+            prof_anotacoes_daily.render_pagina(aluno)
 
     elif menu == ROTA_LIBERAR_NOTAS and perfil == "Professor" and pode_gerenciar_liberacao_notas(aluno):
         prof_liberacao_notas.render(aluno)

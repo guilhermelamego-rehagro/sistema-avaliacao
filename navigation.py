@@ -35,6 +35,7 @@ ROTA_FREQ_PROGRAMACAO = "freq_programacao"
 ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
 ROTA_IMPORT_CANVAS = "import_canvas"
 ROTA_LIBERAR_NOTAS = "liberar_notas"
+ROTA_DASHBOARD_CURSO = "dashboard_curso"
 
 # Coordenador
 ROTA_COORD_CONFIG = "coord_config"
@@ -44,6 +45,9 @@ ROTA_COORD_DISCIPLINAS = "coord_disciplinas"
 ROTA_COORD_CICLOS = "coord_ciclos"
 ROTA_COORD_PROFESSORES = "coord_professores"
 ROTA_COORD_PLANEJAMENTO = "coord_planejamento"
+ROTA_ALUNOS_FICHA = "alunos_ficha"
+ROTA_FORMACAO_GRUPOS = "formacao_grupos"
+ROTA_MATRICULAS_OFERTA = "matriculas_oferta"
 ROTA_FREQ_ENCONTRO = "freq_encontro"
 
 ROTAS_LAYOUT_LARGO = frozenset(
@@ -58,6 +62,9 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_COORD_CICLOS,
         ROTA_COORD_PROFESSORES,
         ROTA_COORD_PLANEJAMENTO,
+        ROTA_ALUNOS_FICHA,
+        ROTA_FORMACAO_GRUPOS,
+        ROTA_MATRICULAS_OFERTA,
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
         ROTA_ANOTACOES_DAILY,
@@ -204,7 +211,16 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
             ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
             ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
             ItemMenu(ROTA_COORD_CONFERIR, "Conferir notas grupos"),
+            ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso"),
         ]
+        from auth.supabase_auth import ambiente_app
+
+        if ambiente_app() == "teste":
+            itens_coord[1:1] = [
+                ItemMenu(ROTA_ALUNOS_FICHA, "Ficha de alunos"),
+                ItemMenu(ROTA_FORMACAO_GRUPOS, "Formação de grupos"),
+                ItemMenu(ROTA_MATRICULAS_OFERTA, "Matrículas na oferta"),
+            ]
         if not professor_e_orientador(usuario):
             itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))
             itens_coord.append(ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"))
@@ -227,7 +243,20 @@ def _secoes_especialista() -> list[SecaoMenu]:
 
 
 def _secoes_secretaria() -> list[SecaoMenu]:
-    return [
+    from auth.supabase_auth import ambiente_app
+
+    secoes: list[SecaoMenu] = []
+    if ambiente_app() == "teste":
+        secoes.append(
+            SecaoMenu(
+                "Acadêmico",
+                (
+                    ItemMenu(ROTA_ALUNOS_FICHA, "Ficha de alunos"),
+                    ItemMenu(ROTA_MATRICULAS_OFERTA, "Matrículas na oferta"),
+                ),
+            )
+        )
+    secoes.append(
         SecaoMenu(
             "Presença",
             (
@@ -235,8 +264,9 @@ def _secoes_secretaria() -> list[SecaoMenu]:
                 ItemMenu(ROTA_FREQ_CONTROLE, "Controle de frequência"),
                 ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
             ),
-        ),
-    ]
+        )
+    )
+    return secoes
 
 
 def secoes_menu(usuario: dict, perfil: str) -> list[SecaoMenu]:
@@ -276,9 +306,14 @@ def titulo_sidebar(perfil: str, usuario: dict) -> str:
 
 def renderizar_sidebar(usuario: dict, perfil: str) -> str:
     """Desenha o menu lateral e retorna a rota selecionada."""
-    st.sidebar.title(titulo_sidebar(perfil, usuario))
+    from auth.impersonacao import esta_impersonando, render_seletor_sidebar
 
-    if perfil == "Professor":
+    titulo = titulo_sidebar(perfil, usuario)
+    if esta_impersonando() and perfil == "Aluno":
+        titulo = "Menu do aluno (visualização)"
+    st.sidebar.title(titulo)
+
+    if perfil == "Professor" and not esta_impersonando():
         from auth.supabase_auth import usuario_e_coordenador
 
         tipo = usuario.get("tipo_professor") or "Orientador"
@@ -322,6 +357,12 @@ def renderizar_sidebar(usuario: dict, perfil: str) -> str:
 
     if perfil == "Aluno":
         _render_link_plataforma_aluno(usuario)
+
+    # Seletor / saída de impersonação (professor ou já no modo aluno)
+    if esta_impersonando():
+        render_seletor_sidebar(st.session_state.get("usuario_real") or usuario)
+    else:
+        render_seletor_sidebar(usuario)
 
     return rota_atual
 

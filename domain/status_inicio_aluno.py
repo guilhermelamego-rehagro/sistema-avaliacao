@@ -10,6 +10,8 @@ import pandas as pd
 from data.sheets import ler_aba
 from domain.ciclos import ciclos_da_disciplina, hoje_normalizado, preparar_ciclos
 from domain.encontro_presencial import ciclos_visiveis_avaliacao, escolher_ciclo_aberto
+from domain.liberacoes_pares import ciclo_pares_para_aluno
+from domain.pares import aluno_ja_enviou_pares, carregar_avaliacoes_pares
 
 StatusTarefa = Literal["pendente", "feito", "perdido", "indisponivel"]
 
@@ -43,13 +45,7 @@ def _ultimo_ciclo_encerrado(ciclos: pd.DataFrame, hoje: pd.Timestamp) -> pd.Seri
 
 
 def _aluno_votou_pares(df_aval: pd.DataFrame, id_ciclo: str, email: str) -> bool:
-    if df_aval.empty:
-        return False
-    mask = (
-        (df_aval["ID_Ciclo"].astype(str).str.strip() == id_ciclo)
-        & (df_aval["Email_Avaliador"].astype(str).str.lower().str.strip() == email.lower().strip())
-    )
-    return not df_aval[mask].empty
+    return aluno_ja_enviou_pares(id_ciclo, email, df_aval)
 
 
 def _aluno_respondeu_curso(df_respostas: pd.DataFrame, id_ciclo: str, email: str) -> bool:
@@ -75,23 +71,28 @@ def status_avaliacao_pares(email_aluno: str) -> ResumoTarefa:
     id_disc, nome_disc = disc
     df_ciclos = preparar_ciclos(ler_aba("Ciclos"))
     ciclos_disc = ciclos_visiveis_avaliacao(ciclos_da_disciplina(df_ciclos, id_disc), id_disc)
-    df_aval = ler_aba("Avaliacoes")
+    df_aval = carregar_avaliacoes_pares()
 
-    ciclo = escolher_ciclo_aberto(ciclos_disc, id_disc)
+    ciclo, liberacao = ciclo_pares_para_aluno(email_aluno, ciclos_disc, id_disc)
     if ciclo is not None:
         id_ciclo = str(ciclo["ID_Ciclo"]).strip()
         nome_ciclo = str(ciclo["Nome_Ciclo"]).strip()
-        if _aluno_votou_pares(df_aval, id_ciclo, email_aluno):
+        votou = _aluno_votou_pares(df_aval, id_ciclo, email_aluno)
+        permite_reenvio = bool(
+            liberacao and str(liberacao.get("Modo", "")).strip() == "reenvio"
+        )
+        if votou and not permite_reenvio:
             return ResumoTarefa(
                 "feito",
                 "Pares — avaliar",
                 f"Você já enviou suas avaliações de pares para {nome_ciclo}.",
                 nome_ciclo,
             )
+        extra = " (liberação excepcional)" if liberacao else ""
         return ResumoTarefa(
             "pendente",
             "Pares — avaliar",
-            f"Avaliação aberta: {nome_ciclo} ({nome_disc}).",
+            f"Avaliação aberta: {nome_ciclo} ({nome_disc}){extra}.",
             nome_ciclo,
         )
 

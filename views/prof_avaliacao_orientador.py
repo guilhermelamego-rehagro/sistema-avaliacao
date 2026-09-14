@@ -200,18 +200,31 @@ def render(usuario: dict):
         col_config[col] = st.column_config.TextColumn(col, help="0 a 10, ex.: 8 ou 8,5")
 
     st.subheader("Grid de notas")
-    df_editado = st.data_editor(
-        df_grid,
-        width="stretch",
-        hide_index=True,
-        column_order=["Nome", "Sala", "Grupo"] + colunas_ciclo,
-        column_config=col_config,
-        disabled=["Nome", "Sala", "Grupo"],
-        key="grid_orientador",
+    st.caption(
+        "Edite as células e clique em **Salvar** uma vez — o formulário confirma a edição "
+        "junto com o envio (evita precisar clicar duas vezes)."
+    )
+    chave_erros = f"orientador_erros_{id_disc}"
+    ver_grid = int(st.session_state.get("grid_orientador_ver", 0))
+    chave_editor = (
+        f"grid_orientador_{id_disc}_{filtro_sala}_{filtro_grupo}_{filtro_nome}_{ver_grid}"
     )
 
-    chave_erros = f"orientador_erros_{id_disc}"
-    if st.button("💾 Salvar alterações do grid", type="primary", width="stretch"):
+    with st.form(f"form_grid_orientador_{id_disc}", border=False):
+        df_editado = st.data_editor(
+            df_grid,
+            width="stretch",
+            hide_index=True,
+            column_order=["Nome", "Sala", "Grupo"] + colunas_ciclo,
+            column_config=col_config,
+            disabled=["Nome", "Sala", "Grupo"],
+            key=chave_editor,
+        )
+        enviou = st.form_submit_button(
+            "💾 Salvar alterações do grid", type="primary", width="stretch"
+        )
+
+    if enviou:
         invalidas, validas = _validar_alteracoes(df_grid, df_editado, colunas_ciclo)
 
         if invalidas:
@@ -225,9 +238,14 @@ def render(usuario: dict):
 
         if validas:
             salvos = _salvar_validas(df_grid, validas, ciclos, id_disc, usuario)
-            registrar_log(usuario["email"], usuario["nome"], f"Avaliação orientador grid - {disc_sel} ({salvos} notas)")
+            registrar_log(
+                usuario["email"],
+                usuario["nome"],
+                f"Avaliação orientador grid - {disc_sel} ({salvos} notas)",
+            )
             st.success(f"{salvos} nota(s) salva(s)!")
             if not invalidas:
+                st.session_state["grid_orientador_ver"] = ver_grid + 1
                 st.rerun()
         elif not invalidas:
             st.info("Nenhuma alteração detectada.")
@@ -236,7 +254,11 @@ def render(usuario: dict):
     if invalidas_sessao:
         st.markdown("**Células com nota inválida:**")
         visao = df_editado[["Nome", "Sala", "Grupo"] + colunas_ciclo].copy()
-        st.dataframe(_estilo_celulas_invalidas(visao, invalidas_sessao), width="stretch", hide_index=True)
+        st.dataframe(
+            _estilo_celulas_invalidas(visao, invalidas_sessao),
+            width="stretch",
+            hide_index=True,
+        )
 
     _render_anotacoes_dailies(id_disc, filtro_sala, filtro_grupo, usuario)
 

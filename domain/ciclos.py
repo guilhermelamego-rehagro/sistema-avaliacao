@@ -39,15 +39,53 @@ def preparar_ciclos(df_ciclos: pd.DataFrame) -> pd.DataFrame:
 
 
 def filtrar_ciclos_ativos(df_ciclos: pd.DataFrame, hoje: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Ciclos abertos para pares do aluno.
+
+    Com janela (Abertura/Encerramento) preenchida: abre pela **data**.
+    ``Status == inativo`` é kill-switch (força fechado mesmo dentro da janela).
+    Sem janela completa: fallback legado pelo Status ativo.
+    """
     hoje = hoje or hoje_normalizado()
     df = preparar_ciclos(df_ciclos)
-    ativo_status = df["Status"].astype(str).str.lower().str.strip() == "ativo"
+    status = df["Status"].astype(str).str.lower().str.strip()
+    kill = status == "inativo"
+    ativo_status = status == "ativo"
     tem_janela = df["Data início"].notna() & df["Data fim"].notna()
     ativo_data = (hoje >= df["Data início"]) & (hoje <= df["Data fim"])
-    # Com abertura e encerramento das pares preenchidos, só abre dentro da janela.
-    # Sem janela completa, mantém o fallback pelo Status ativo.
-    aberto = (tem_janela & ativo_status & ativo_data) | (~tem_janela & ativo_status)
+    aberto = (tem_janela & ativo_data & ~kill) | (~tem_janela & ativo_status)
     return df[aberto]
+
+
+def overlaps_janelas_pares(df_ciclos: pd.DataFrame) -> list[str]:
+    """Avisa pares de ciclos da mesma disciplina com janelas de pares sobrepostas."""
+    if df_ciclos is None or df_ciclos.empty:
+        return []
+    df = preparar_ciclos(df_ciclos)
+    if not {"ID_Disciplina", "Data início", "Data fim", "Nome_Ciclo"}.issubset(df.columns):
+        return []
+    avisos: list[str] = []
+    for id_disc, grupo in df.groupby(df["ID_Disciplina"].astype(str).str.strip(), dropna=False):
+        linhas = []
+        for _, row in grupo.iterrows():
+            ini = row.get("Data início")
+            fim = row.get("Data fim")
+            if pd.isna(ini) or pd.isna(fim):
+                continue
+            status = str(row.get("Status", "")).strip().lower()
+            if status == "inativo":
+                continue
+            nome = str(row.get("Nome_Ciclo", "")).strip() or str(row.get("ID_Ciclo", "")).strip()
+            linhas.append((nome, pd.Timestamp(ini).normalize(), pd.Timestamp(fim).normalize()))
+        for i in range(len(linhas)):
+            for j in range(i + 1, len(linhas)):
+                n1, a1, b1 = linhas[i]
+                n2, a2, b2 = linhas[j]
+                if a1 <= b2 and a2 <= b1:
+                    avisos.append(
+                        f"Disciplina {id_disc}: janelas de pares de **{n1}** e **{n2}** "
+                        f"se sobrepõem. No overlap, o aluno vê o ciclo de maior Ordem."
+                    )
+    return avisos
 
 
 def ciclos_da_disciplina(df_ciclos: pd.DataFrame, id_disciplina: str) -> pd.DataFrame:
@@ -177,7 +215,7 @@ def periodo_academico_texto(row: pd.Series) -> tuple[str, str]:
 
 
 def ciclo_inativo(id_ciclo: str) -> bool:
-    """Retorna True quando o ciclo não está mais em andamento."""
+    """Retorna True quando o ciclo não está mais em andamento para pares."""
     df = ler_aba("Ciclos")
     filtro = df[df["ID_Ciclo"].astype(str).str.strip() == str(id_ciclo).strip()]
     if filtro.empty:
@@ -185,14 +223,15 @@ def ciclo_inativo(id_ciclo: str) -> bool:
 
     hoje = hoje_normalizado()
     row = filtro.iloc[0]
-    ativo_status = str(row.get("Status", "")).lower().strip() == "ativo"
+    status = str(row.get("Status", "")).lower().strip()
+    kill = status == "inativo"
     prep = preparar_ciclos(filtro)
     inicio = prep.iloc[0]["Data início"]
     fim = prep.iloc[0]["Data fim"]
     if pd.notna(inicio) and pd.notna(fim):
         ativo_data = (hoje >= inicio) & (hoje <= fim)
-        return not (ativo_status and ativo_data)
-    return not ativo_status
+        return bool(kill or not ativo_data)
+    return status != "ativo"
 
 
 def _como_date(valor) -> date | None:

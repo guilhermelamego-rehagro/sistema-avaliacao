@@ -17,6 +17,82 @@ def _agora() -> str:
     return datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M:%S")
 
 
+def _carregar_avaliacoes_orientador_sheets() -> pd.DataFrame:
+    try:
+        return ler_aba("Avaliacao_Orientador")
+    except Exception:
+        return pd.DataFrame()
+
+
+def _carregar_avaliacoes_orientador() -> pd.DataFrame:
+    """Supabase tipado no teste; Sheets em produção ou como fallback."""
+    try:
+        from auth.supabase_auth import ambiente_app
+        from data.supabase_operacional import listar_avaliacoes_orientador
+
+        if ambiente_app() == "teste":
+            return listar_avaliacoes_orientador()
+    except Exception:
+        pass
+    return _carregar_avaliacoes_orientador_sheets()
+
+
+def _espelhar_avaliacao_orientador_sheets(dados: dict[str, str]) -> None:
+    """Append idempotente: não duplica o mesmo lançamento no backup."""
+    df = _carregar_avaliacoes_orientador_sheets()
+    if not df.empty:
+        colunas = [
+            "Data",
+            "ID_Ciclo",
+            "Nome_Ciclo",
+            "ID_Disciplina",
+            "Email_Aluno",
+            "Nome_Aluno",
+            "Grupo",
+            "Email_Orientador",
+            "Nota",
+            "Tipo",
+        ]
+
+        def _igual(row) -> bool:
+            for coluna in colunas:
+                atual = str(row.get(coluna, "") or "").strip()
+                esperado = str(dados.get(coluna, "") or "").strip()
+                if coluna == "Nota":
+                    try:
+                        if float(atual.replace(",", ".")) != float(
+                            esperado.replace(",", ".")
+                        ):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                elif atual != esperado:
+                    return False
+            return True
+
+        if any(_igual(row) for _, row in df.iterrows()):
+            return
+
+    planilha.worksheet("Avaliacao_Orientador").append_row(
+        [dados.get(coluna, "") for coluna in COLUNAS_AVALIACAO_ORIENTADOR]
+    )
+    limpar_cache_planilhas()
+
+
+COLUNAS_AVALIACAO_ORIENTADOR = (
+    "Data",
+    "ID_Ciclo",
+    "Nome_Ciclo",
+    "ID_Disciplina",
+    "Email_Aluno",
+    "Nome_Aluno",
+    "Grupo",
+    "Email_Orientador",
+    "Nota",
+    "Tipo",
+)
+
+
 def _normalizar_df_grupo(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -174,10 +250,49 @@ def salvar_avaliacao_orientador(
     email_orientador: str,
     tipo: str = "Ciclo",
 ):
+    dados = {
+        "Data": _agora(),
+        "ID_Ciclo": str(id_ciclo),
+        "Nome_Ciclo": str(nome_ciclo),
+        "ID_Disciplina": str(id_disciplina),
+        "Email_Aluno": str(email_aluno).strip().lower(),
+        "Nome_Aluno": str(nome_aluno),
+        "Grupo": str(grupo),
+        "Email_Orientador": str(email_orientador).strip().lower(),
+        "Nota": str(nota),
+        "Tipo": str(tipo),
+    }
+    try:
+        from auth.supabase_auth import ambiente_app
+        from data.supabase_operacional import (
+            OperacionalIndisponivel,
+            salvar_avaliacao_orientador as salvar_operacional,
+        )
+
+        if ambiente_app() == "teste":
+            try:
+                salvar_operacional(dados)
+                # A chave inclui o timestamp e todos os campos. O upsert no
+                # Supabase e a checagem abaixo tornam retries idempotentes,
+                # sem converter o histórico append-only em uma atualização.
+                try:
+                    _espelhar_avaliacao_orientador_sheets(dados)
+                except Exception:
+                    # O lançamento já está seguro no Supabase; nunca fazer
+                    # fallback automático após uma gravação bem-sucedida.
+                    pass
+                return
+            except OperacionalIndisponivel:
+                pass
+    except Exception:
+        pass
+
+    # Caminho legado: mantém a gravação Sheets atual, inclusive tipos/casing
+    # recebidos pela chamada, em produção e quando o Supabase falhar no teste.
     ws = planilha.worksheet("Avaliacao_Orientador")
     ws.append_row(
         [
-            _agora(),
+            dados["Data"],
             id_ciclo,
             nome_ciclo,
             id_disciplina,
@@ -328,10 +443,7 @@ def obter_media_avaliacao_grupo_aluno(
 
 
 def obter_nota_orientador(id_ciclo: str, email_aluno: str) -> float | None:
-    try:
-        df = ler_aba("Avaliacao_Orientador")
-    except Exception:
-        return None
+    df = _carregar_avaliacoes_orientador()
     if df.empty:
         return None
 
@@ -350,10 +462,7 @@ def obter_nota_orientador(id_ciclo: str, email_aluno: str) -> float | None:
 
 def carregar_mapa_notas_orientador(id_disciplina: str) -> dict[tuple[str, str], float]:
     """Retorna {(email, id_ciclo): nota} com a última nota lançada por aluno/ciclo."""
-    try:
-        df = ler_aba("Avaliacao_Orientador")
-    except Exception:
-        return {}
+    df = _carregar_avaliacoes_orientador()
     if df.empty:
         return {}
 

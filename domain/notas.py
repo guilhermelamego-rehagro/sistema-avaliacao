@@ -5,11 +5,11 @@ from __future__ import annotations
 import pandas as pd
 
 from config import PESO_ORIENTADOR, PESO_PARES
-from data.sheets import ler_aba
 from domain.avaliacoes import formatar_nota_entrega, obter_media_avaliacao_grupo_aluno, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina
 from domain.encontro_presencial import resolver_id_ciclo_componente
+from domain.pares import carregar_avaliacoes_pares
 from domain.presenca import calcular_matriz_dailies
 from utils.disciplina import normalizar_id
 
@@ -31,7 +31,7 @@ def calcular_nota_ciclo(
 def _situacao_pares_ciclo(email: str, id_ciclo: str) -> tuple[float | None, bool]:
     """Retorna (nota de pares 0-10 ou None, se o aluno já enviou a avaliação)."""
     try:
-        df = ler_aba("Avaliacoes")
+        df = carregar_avaliacoes_pares()
     except Exception:
         return None, False
 

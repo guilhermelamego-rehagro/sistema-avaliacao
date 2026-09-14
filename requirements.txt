@@ -6,3 +6,4 @@ openpyxl
 xlsxwriter
 supabase
 tomli
+fpdf2

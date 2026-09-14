@@ -13,7 +13,26 @@ from data.sheets import garantir_aba_avaliacao, ler_aba, limpar_cache_planilhas,
 from utils.disciplina import normalizar_id
 
 ABA = "Liberacoes_Pares_Excepcionais"
-COLUNAS = ABAS_AVALIACAO[ABA]
+_COLUNAS_PADRAO = (
+    "ID",
+    "Email_Aluno",
+    "Nome_Aluno",
+    "ID_Disciplina",
+    "ID_Ciclo",
+    "Nome_Ciclo",
+    "Modo",
+    "Valido_Ate",
+    "Motivo",
+    "Email_Liberador",
+    "Nome_Liberador",
+    "Criado_Em",
+    "Usado_Em",
+    "Revogado_Em",
+)
+COLUNAS = list(ABAS_AVALIACAO.get(ABA, _COLUNAS_PADRAO))
+# Garante a chave mesmo se o config do deploy estiver defasado.
+if ABA not in ABAS_AVALIACAO:
+    ABAS_AVALIACAO[ABA] = list(COLUNAS)
 TZ = ZoneInfo("America/Sao_Paulo")
 MODOS = ("primeiro_envio", "reenvio")
 

@@ -161,10 +161,10 @@ class ResumoNps:
     nps: float | None
     respondentes: int
     promotores: int
-    passivos: int
+    neutros: int
     detratores: int
     pct_promotores: float
-    pct_passivos: float
+    pct_neutros: float
     pct_detratores: float
 
 
@@ -176,16 +176,16 @@ def calcular_nps(notas: list[float] | pd.Series) -> ResumoNps:
         return ResumoNps(None, 0, 0, 0, 0, 0.0, 0.0, 0.0)
     prom = int(((serie >= 9) & (serie <= 10)).sum())
     det = int((serie <= 6).sum())
-    pas = int(((serie >= 7) & (serie <= 8)).sum())
+    neu = int(((serie >= 7) & (serie <= 8)).sum())
     nps = (prom - det) / total * 100.0
     return ResumoNps(
         nps=round(nps, 1),
         respondentes=total,
         promotores=prom,
-        passivos=pas,
+        neutros=neu,
         detratores=det,
         pct_promotores=round(100.0 * prom / total, 1),
-        pct_passivos=round(100.0 * pas / total, 1),
+        pct_neutros=round(100.0 * neu / total, 1),
         pct_detratores=round(100.0 * det / total, 1),
     )
 
@@ -258,6 +258,33 @@ def contagem_respondentes(df: pd.DataFrame) -> int:
     return int(df["Email_Aluno"].nunique())
 
 
+def mapa_disciplina_codigo(df_disc: pd.DataFrame | None) -> dict[str, str]:
+    """Nome_Disciplina → ID_Disciplina (código curto)."""
+    if df_disc is None or df_disc.empty:
+        return {}
+    out: dict[str, str] = {}
+    for _, row in df_disc.iterrows():
+        nome = _texto(row.get("Nome_Disciplina"))
+        codigo = _texto(row.get("ID_Disciplina"))
+        if nome and codigo:
+            out[nome] = codigo
+    return out
+
+
+def anexar_codigo_disciplina(df: pd.DataFrame, mapa: dict[str, str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if "Codigo_Disciplina" in out.columns:
+        out["Codigo_Disciplina"] = out["Codigo_Disciplina"].map(_texto)
+        return out
+    if "Disciplina" not in out.columns:
+        out["Codigo_Disciplina"] = ""
+        return out
+    out["Codigo_Disciplina"] = out["Disciplina"].map(_texto).map(lambda n: mapa.get(n, n[:12] if n else ""))
+    return out
+
+
 def _nome_ciclo_grupo(grupo: pd.DataFrame, id_c: str) -> str:
     if "Ciclo" in grupo.columns:
         nomes = [n for n in grupo["Ciclo"].map(_texto).tolist() if n]
@@ -273,26 +300,49 @@ def _disciplina_grupo(grupo: pd.DataFrame) -> str:
     return nomes[0] if nomes else ""
 
 
-def rotulo_ciclo_disciplina(ciclo: str, disciplina: str = "") -> str:
-    """Rótulo único na comparação (evita juntar 'Ciclo 1' de disciplinas diferentes)."""
-    ciclo_t = _texto(ciclo) or "—"
-    disc_t = _texto(disciplina)
-    if disc_t:
-        return f"{disc_t} · {ciclo_t}"
+def _codigo_grupo(grupo: pd.DataFrame) -> str:
+    if "Codigo_Disciplina" in grupo.columns:
+        codigos = [c for c in grupo["Codigo_Disciplina"].map(_texto).tolist() if c]
+        if codigos:
+            return codigos[0]
+    return _disciplina_grupo(grupo)
+
+
+def rotulo_ciclo_disciplina(ciclo: str, codigo_disciplina: str = "") -> str:
+    """Rótulo curto: código da disciplina · ciclo (evita colunas largas e colisão de nomes)."""
+    ciclo_t = _texto(ciclo) or "-"
+    cod = _texto(codigo_disciplina)
+    if cod:
+        return f"{cod} · {ciclo_t}"
     return ciclo_t
 
 
+def classificacao_nps(nota) -> str:
+    try:
+        n = float(nota)
+    except (TypeError, ValueError):
+        return ""
+    if n >= 9:
+        return "Promotor"
+    if n <= 6:
+        return "Detrator"
+    if 7 <= n <= 8:
+        return "Neutro"
+    return ""
+
+
 def nps_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
-    """Uma linha por ciclo (comparativo), com disciplina no rótulo."""
+    """Uma linha por ciclo (comparativo), com código da disciplina no rótulo."""
     cols = [
         "ID_Ciclo",
+        "Codigo",
         "Disciplina",
         "Ciclo",
         "Rotulo",
         "NPS",
         "Respondentes",
         "Promotores",
-        "Passivos",
+        "Neutros",
         "Detratores",
     ]
     if df is None or df.empty or "ID_Ciclo" not in df.columns:
@@ -302,38 +352,42 @@ def nps_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
         resumo = nps_do_recorte(grupo)
         nome = _nome_ciclo_grupo(grupo, str(id_c))
         disc = _disciplina_grupo(grupo)
+        codigo = _codigo_grupo(grupo)
         linhas.append(
             {
                 "ID_Ciclo": str(id_c).strip(),
+                "Codigo": codigo,
                 "Disciplina": disc,
                 "Ciclo": nome,
-                "Rotulo": rotulo_ciclo_disciplina(nome, disc),
+                "Rotulo": rotulo_ciclo_disciplina(nome, codigo),
                 "NPS": resumo.nps,
                 "Respondentes": resumo.respondentes,
                 "Promotores": resumo.promotores,
-                "Passivos": resumo.passivos,
+                "Neutros": resumo.neutros,
                 "Detratores": resumo.detratores,
             }
         )
     out = pd.DataFrame(linhas, columns=cols)
-    return out.sort_values(["Disciplina", "Ciclo"]).reset_index(drop=True)
+    return out.sort_values(["Codigo", "Ciclo"]).reset_index(drop=True)
 
 
 def metricas_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
-    """Métricas 0–5 por ciclo (formato longo), com disciplina no rótulo."""
-    cols = ["ID_Ciclo", "Disciplina", "Ciclo", "Rotulo", "Item", "Média", "N"]
+    """Métricas 0–5 por ciclo (formato longo), com código da disciplina no rótulo."""
+    cols = ["ID_Ciclo", "Codigo", "Disciplina", "Ciclo", "Rotulo", "Item", "Média", "N"]
     if df is None or df.empty or "ID_Ciclo" not in df.columns:
         return pd.DataFrame(columns=cols)
     linhas = []
     for id_c, grupo in df.groupby("ID_Ciclo", sort=False):
         nome = _nome_ciclo_grupo(grupo, str(id_c))
         disc = _disciplina_grupo(grupo)
-        rotulo = rotulo_ciclo_disciplina(nome, disc)
+        codigo = _codigo_grupo(grupo)
+        rotulo = rotulo_ciclo_disciplina(nome, codigo)
         met = media_itens_metricas(grupo)
         for _, row in met.iterrows():
             linhas.append(
                 {
                     "ID_Ciclo": str(id_c).strip(),
+                    "Codigo": codigo,
                     "Disciplina": disc,
                     "Ciclo": nome,
                     "Rotulo": rotulo,
@@ -347,32 +401,36 @@ def metricas_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
         return out
     ordem = {nome: i for i, nome in enumerate(ITENS_METRICA)}
     out["_ord"] = out["Item"].map(ordem)
-    return out.sort_values(["Disciplina", "Ciclo", "_ord"]).drop(columns=["_ord"]).reset_index(drop=True)
+    return out.sort_values(["Codigo", "Ciclo", "_ord"]).drop(columns=["_ord"]).reset_index(drop=True)
 
 
 def metricas_comparativo_tabela(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame:
-    """Critério nas linhas, ciclo (com disciplina) nas colunas; célula = 'média (N)'."""
+    """Critério nas linhas, código·ciclo nas colunas; célula = 'média (N)'."""
     if df_metricas_ciclo is None or df_metricas_ciclo.empty:
         return pd.DataFrame(columns=["Critério"])
     base = df_metricas_ciclo.copy()
     if "Rotulo" not in base.columns:
         base["Rotulo"] = [
-            rotulo_ciclo_disciplina(c, d)
-            for c, d in zip(base.get("Ciclo", ""), base.get("Disciplina", ""))
+            rotulo_ciclo_disciplina(_texto(c), _texto(cod))
+            for c, cod in zip(
+                base["Ciclo"] if "Ciclo" in base.columns else [""] * len(base),
+                base["Codigo"] if "Codigo" in base.columns else [""] * len(base),
+            )
         ]
+    if "Codigo" not in base.columns:
+        base["Codigo"] = ""
     base["Celula"] = base.apply(
         lambda r: (
             f"{float(r['Média']):.2f} ({int(r['N'])})"
             if pd.notna(r.get("Média"))
-            else "—"
+            else "-"
         ),
         axis=1,
     )
-    # Ordem estável de colunas: Disciplina + Ciclo
     ordem_cols = (
-        base[["Rotulo", "Disciplina", "Ciclo"]]
+        base[["Rotulo", "Codigo", "Ciclo"]]
         .drop_duplicates()
-        .sort_values(["Disciplina", "Ciclo"])["Rotulo"]
+        .sort_values(["Codigo", "Ciclo"])["Rotulo"]
         .tolist()
     )
     pivot = base.pivot_table(
@@ -380,9 +438,69 @@ def metricas_comparativo_tabela(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame
     )
     pivot = pivot.reindex(columns=ordem_cols)
     pivot = pivot.reindex(index=list(ITENS_METRICA))
-    pivot = pivot.fillna("—").reset_index().rename(columns={"Item": "Critério"})
+    pivot = pivot.fillna("-").reset_index().rename(columns={"Item": "Critério"})
     pivot.columns.name = None
     return pivot
+
+
+def detalhe_avaliacao_por_aluno(df: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por aluno × ciclo: NPS, categoria e médias dos critérios."""
+    cols = [
+        "Aluno",
+        "Email",
+        "Codigo",
+        "Disciplina",
+        "Ciclo",
+        "ID_Ciclo",
+        "NPS",
+        "Categoria",
+        *ITENS_METRICA,
+    ]
+    if df is None or df.empty or "Email_Aluno" not in df.columns:
+        return pd.DataFrame(columns=cols)
+
+    base = df.copy()
+    if "ID_Ciclo" not in base.columns:
+        base["ID_Ciclo"] = ""
+    base["Email_Aluno"] = base["Email_Aluno"].map(_texto).str.lower()
+    linhas = []
+    for (email, id_c), grupo in base.groupby(["Email_Aluno", "ID_Ciclo"], sort=False):
+        if not email:
+            continue
+        nome = ""
+        if "Nome_Aluno" in grupo.columns:
+            nomes = [n for n in grupo["Nome_Aluno"].map(_texto).tolist() if n]
+            nome = nomes[0] if nomes else email
+        else:
+            nome = email
+        nps_bloco = grupo[grupo["Item"] == ITEM_NPS] if "Item" in grupo.columns else grupo.iloc[0:0]
+        nota_nps = None
+        if not nps_bloco.empty and "Resposta" in nps_bloco.columns:
+            vals = pd.to_numeric(nps_bloco["Resposta"], errors="coerce").dropna()
+            if not vals.empty:
+                nota_nps = float(vals.iloc[0])
+        linha = {
+            "Aluno": nome,
+            "Email": email,
+            "Codigo": _codigo_grupo(grupo),
+            "Disciplina": _disciplina_grupo(grupo),
+            "Ciclo": _nome_ciclo_grupo(grupo, str(id_c)),
+            "ID_Ciclo": str(id_c).strip(),
+            "NPS": round(nota_nps, 1) if nota_nps is not None else None,
+            "Categoria": classificacao_nps(nota_nps) if nota_nps is not None else "",
+        }
+        met = media_itens_metricas(grupo)
+        medias = {r["Item"]: r["Média"] for _, r in met.iterrows()} if not met.empty else {}
+        for item in ITENS_METRICA:
+            linha[item] = medias.get(item)
+        linhas.append(linha)
+
+    out = pd.DataFrame(linhas, columns=cols)
+    if out.empty:
+        return out
+    ordem_cat = {"Detrator": 0, "Neutro": 1, "Promotor": 2, "": 3}
+    out["_ord"] = out["Categoria"].map(ordem_cat).fillna(3)
+    return out.sort_values(["_ord", "NPS", "Aluno"], ascending=[True, True, True]).drop(columns=["_ord"]).reset_index(drop=True)
 
 
 def _sem_acento(texto: str) -> str:
@@ -492,7 +610,7 @@ def gerar_pdf_recorte(
         f"NPS: {nps_txt} | Respondentes unicos: {n_alunos} | "
         f"Base NPS: {nps.respondentes} | "
         f"Promotores: {nps.promotores} ({nps.pct_promotores}%) | "
-        f"Passivos: {nps.passivos} ({nps.pct_passivos}%) | "
+        f"Neutros: {nps.neutros} ({nps.pct_neutros}%) | "
         f"Detratores: {nps.detratores} ({nps.pct_detratores}%)"
     )
     pdf.ln(2)

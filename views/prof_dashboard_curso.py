@@ -10,10 +10,13 @@ import streamlit as st
 from data.sheets import ler_aba
 from domain.dashboard_curso import (
     ITENS_TEXTO,
+    anexar_codigo_disciplina,
     carregar_respostas_curso,
     contagem_respondentes,
+    detalhe_avaliacao_por_aluno,
     filtrar_respostas,
     gerar_pdf_recorte,
+    mapa_disciplina_codigo,
     media_didatica_professores,
     media_itens_metricas,
     metricas_comparativo_tabela,
@@ -80,8 +83,10 @@ def _opcoes_ciclos(
             if not cid or cid in vistos:
                 continue
             nome = str(row.get("Nome_Ciclo", "")).strip() or cid
+            codigo = str(row.get("ID_Disciplina", "")).strip()
             vistos.add(cid)
-            opcoes.append((cid, f"{nome} ({cid})"))
+            rotulo = f"{codigo} · {nome} ({cid})" if codigo else f"{nome} ({cid})"
+            opcoes.append((cid, rotulo))
 
     if not opcoes and {"ID_Ciclo", "Ciclo"}.issubset(df.columns):
         subset = df
@@ -113,6 +118,7 @@ def render(usuario: dict):
 
     df_disc = ler_aba("Disciplinas")
     df_ciclos = ler_aba("Ciclos")
+    df = anexar_codigo_disciplina(df, mapa_disciplina_codigo(df_disc))
 
     disciplinas = _disciplinas_disponiveis(df, df_disc)
     default_disc = _default_disciplinas(disciplinas, df_disc)
@@ -171,7 +177,7 @@ def render(usuario: dict):
                     "Fim_ciclo": "Fim do ciclo",
                     "Abertura_pares": "Abertura das pares",
                     "Encerramento_pares": "Encerramento das pares",
-                    "Disciplina_ID": "ID disciplina",
+                    "Disciplina_ID": "Código disciplina",
                 }
             ),
             width="stretch",
@@ -185,6 +191,7 @@ def render(usuario: dict):
     nps_ciclos = nps_por_ciclo(recorte)
     met_ciclos = metricas_por_ciclo(recorte)
     met_tabela = metricas_comparativo_tabela(met_ciclos)
+    detalhe_alunos = detalhe_avaliacao_por_aluno(recorte)
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Respondentes", n_alunos)
@@ -192,7 +199,7 @@ def render(usuario: dict):
     m3.metric("Promotores", f"{nps.promotores} ({nps.pct_promotores}%)")
     m4.metric("Detratores", f"{nps.detratores} ({nps.pct_detratores}%)")
     st.caption(
-        f"Passivos (7–8): **{nps.passivos}** ({nps.pct_passivos}%) · "
+        f"Neutros (7–8): **{nps.neutros}** ({nps.pct_neutros}%) · "
         f"base NPS: **{nps.respondentes}** resposta(s)."
     )
 
@@ -204,13 +211,15 @@ def render(usuario: dict):
             chart_nps = nps_ciclos.set_index("Rotulo")[["NPS"]].copy()
             st.bar_chart(chart_nps)
             st.dataframe(
-                nps_ciclos[["Disciplina", "Ciclo", "NPS", "Respondentes", "Promotores", "Passivos", "Detratores"]],
+                nps_ciclos[
+                    ["Codigo", "Ciclo", "NPS", "Respondentes", "Promotores", "Neutros", "Detratores"]
+                ].rename(columns={"Codigo": "Código"}),
                 width="stretch",
                 hide_index=True,
             )
 
         st.subheader("Métricas por ciclo (0–5)")
-        st.caption("Cada critério em uma linha; colunas = disciplina · ciclo; valor = média (N).")
+        st.caption("Cada critério em uma linha; colunas = código · ciclo; valor = média (N).")
         if met_tabela.empty or len(met_tabela.columns) <= 1:
             st.caption("Sem métricas por ciclo neste recorte.")
         else:
@@ -228,6 +237,45 @@ def render(usuario: dict):
         st.caption("Sem avaliações de didática neste recorte.")
     else:
         st.dataframe(didatica, width="stretch", hide_index=True)
+
+    st.subheader("Detalhamento por aluno")
+    st.caption(
+        "NPS individual no recorte filtrado. Use o filtro de categoria para listar só detratores "
+        "(nota 0–6), neutros (7–8) ou promotores (9–10)."
+    )
+    if detalhe_alunos.empty:
+        st.caption("Sem respostas individuais neste recorte.")
+    else:
+        cats = ["Detrator", "Neutro", "Promotor"]
+        presentes = [c for c in cats if c in set(detalhe_alunos["Categoria"].tolist())]
+        c_f1, c_f2 = st.columns([2, 2])
+        with c_f1:
+            cats_sel = st.multiselect(
+                "Categoria NPS:",
+                options=cats,
+                default=["Detrator"] if "Detrator" in presentes else presentes,
+                key="dash_curso_cat_aluno",
+            )
+        with c_f2:
+            busca = st.text_input(
+                "Buscar aluno (nome ou e-mail):",
+                key="dash_curso_busca_aluno",
+            ).strip().casefold()
+
+        vista = detalhe_alunos
+        if cats_sel:
+            vista = vista[vista["Categoria"].isin(cats_sel)]
+        if busca:
+            vista = vista[
+                vista["Aluno"].astype(str).str.casefold().str.contains(busca, na=False)
+                | vista["Email"].astype(str).str.casefold().str.contains(busca, na=False)
+            ]
+        st.caption(f"{len(vista)} aluno(s) × ciclo no filtro.")
+        st.dataframe(
+            vista.rename(columns={"Codigo": "Código"}),
+            width="stretch",
+            hide_index=True,
+        )
 
     st.subheader("Comentários abertos")
     abas = st.tabs(list(ITENS_TEXTO))
@@ -247,13 +295,14 @@ def render(usuario: dict):
         met_tabela.to_excel(writer, index=False, sheet_name="Metricas_comparativo")
         met_ciclos.to_excel(writer, index=False, sheet_name="Metricas_por_ciclo")
         didatica.to_excel(writer, index=False, sheet_name="Didatica")
+        detalhe_alunos.to_excel(writer, index=False, sheet_name="Por_aluno")
         pd.DataFrame(
             [
                 {
                     "NPS": nps.nps,
                     "Respondentes_NPS": nps.respondentes,
                     "Promotores": nps.promotores,
-                    "Passivos": nps.passivos,
+                    "Neutros": nps.neutros,
                     "Detratores": nps.detratores,
                     "Respondentes_unicos": n_alunos,
                     "Modo_grafico": modo,

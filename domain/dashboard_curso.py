@@ -971,8 +971,8 @@ def gerar_pdf_recorte(
 
     pdf.fonte_rel = fonte
     pdf.titulo_rel = t("Avaliação do curso — resultados")
-    pdf.subtitulo_rel = t(f"Gerado em {agora}")
-    pdf.rodape_rel = t("Rehagro · Gestão do Agronegócio")
+    pdf.subtitulo_rel = t(f"Graduação em Gestão do Agronegócio · Gerado em {agora}")
+    pdf.rodape_rel = t("Rehagro · Graduação em Gestão do Agronegócio")
     pdf.add_page()
 
     def titulo(txt: str, size: int = 12, espaco_antes: float = 3.0):
@@ -1047,12 +1047,10 @@ def gerar_pdf_recorte(
 
     # --- Filtros do recorte ---
     titulo("Recorte analisado", 12, espaco_antes=0)
+    corpo("Curso: Graduação em Gestão do Agronegócio")
     corpo(f"Disciplina(s): {', '.join(disciplinas) if disciplinas else 'Todas'}")
     corpo(f"Sala(s): {', '.join(salas) if salas else 'Todas'}")
     corpo(f"Modo: {modo_grafico}")
-    ocultas = [rotulo for chave, rotulo in SECOES_PDF if not ativas.get(chave, True)]
-    if ocultas:
-        corpo(f"Seções omitidas neste relatório: {', '.join(ocultas)}.")
 
     if ativas["periodos"] and ciclos_info is not None and not ciclos_info.empty:
         periodos = ciclos_info.rename(

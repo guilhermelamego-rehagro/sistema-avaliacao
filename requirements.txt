@@ -7,3 +7,4 @@ xlsxwriter
 supabase
 tomli
 fpdf2
+matplotlib

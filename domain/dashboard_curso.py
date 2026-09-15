@@ -85,17 +85,73 @@ def filtrar_respostas(
     *,
     id_ciclo: str | list[str] | None = None,
     disciplina: str | list[str] | None = None,
+    sala: str | list[str] | None = None,
 ) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame() if df is None else df
     out = df
     ciclos = _lista_filtro(id_ciclo)
     discs = _lista_filtro(disciplina)
+    salas = _lista_filtro(sala)
     if ciclos and "ID_Ciclo" in out.columns:
         out = out[out["ID_Ciclo"].isin(ciclos)]
     if discs and "Disciplina" in out.columns:
         out = out[out["Disciplina"].isin(discs)]
+    if salas and "Sala" in out.columns:
+        out = out[out["Sala"].isin(salas)]
     return out
+
+
+def anexar_sala(df: pd.DataFrame, df_entrancia: pd.DataFrame | None) -> pd.DataFrame:
+    """Sala vem da Entrância (e-mail × disciplina); Respostas_Curso não guarda sala."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    if df_entrancia is None or df_entrancia.empty:
+        out["Sala"] = ""
+        return out
+    ent = df_entrancia.copy()
+    ent.columns = [str(c).strip() for c in ent.columns]
+    col_email = next(
+        (c for c in ("Email_Pessoal", "Email_Aluno", "Email") if c in ent.columns),
+        None,
+    )
+    if not col_email or "Sala" not in ent.columns:
+        out["Sala"] = ""
+        return out
+    por_chave: dict[tuple[str, str], str] = {}
+    por_email: dict[str, str] = {}
+    for _, row in ent.iterrows():
+        email = _texto(row.get(col_email)).lower()
+        if not email:
+            continue
+        sala = _texto(row.get("Sala"))
+        if not sala:
+            continue
+        codigo = _texto(row.get("ID_Disciplina")).casefold()
+        por_chave[(codigo, email)] = sala
+        por_email.setdefault(email, sala)
+
+    emails = out["Email_Aluno"].map(_texto).str.lower() if "Email_Aluno" in out.columns else pd.Series([""] * len(out))
+    codigos = (
+        out["Codigo_Disciplina"].map(_texto).str.casefold()
+        if "Codigo_Disciplina" in out.columns
+        else pd.Series([""] * len(out), index=out.index)
+    )
+    out["Sala"] = [
+        por_chave.get((cod, mail)) or por_email.get(mail, "")
+        for cod, mail in zip(codigos, emails)
+    ]
+    return out
+
+
+def salas_disponiveis(df: pd.DataFrame) -> list[str]:
+    if df is None or df.empty or "Sala" not in df.columns:
+        return []
+    return sorted(
+        {s for s in df["Sala"].map(_texto).tolist() if s},
+        key=lambda x: (len(x), x),
+    )
 
 
 def _fmt_data_br(valor) -> str:
@@ -505,14 +561,133 @@ def detalhe_avaliacao_por_aluno(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values(["_ord", "NPS", "Aluno"], ascending=[True, True, True]).drop(columns=["_ord"]).reset_index(drop=True)
 
 
+def didatica_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
+    """Média de didática por professor, quebrada por ciclo."""
+    cols = ["Codigo", "Ciclo", "Rotulo", "Professor", "Média", "N"]
+    if df is None or df.empty or "Item" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    base = df[df["Item"] == ITEM_DIDATICA].copy()
+    if base.empty:
+        return pd.DataFrame(columns=cols)
+    if "ID_Ciclo" not in base.columns:
+        base["ID_Ciclo"] = ""
+    linhas = []
+    for id_c, grupo in base.groupby("ID_Ciclo", sort=False):
+        nome = _nome_ciclo_grupo(grupo, str(id_c))
+        codigo = _codigo_grupo(grupo)
+        rotulo = rotulo_ciclo_disciplina(nome, codigo)
+        med = media_didatica_professores(grupo)
+        for _, row in med.iterrows():
+            linhas.append(
+                {
+                    "Codigo": codigo,
+                    "Ciclo": nome,
+                    "Rotulo": rotulo,
+                    "Professor": row["Professor"],
+                    "Média": row["Média"],
+                    "N": row["N"],
+                }
+            )
+    out = pd.DataFrame(linhas, columns=cols)
+    if out.empty:
+        return out
+    return out.sort_values(["Codigo", "Ciclo", "Média"], ascending=[True, True, False]).reset_index(drop=True)
+
+
+def metricas_tabela_acumulado(df_metricas: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha ('Acumulado') com os critérios nas colunas: 'média (N)'."""
+    colunas = ["Recorte", *ITENS_METRICA]
+    linha = {"Recorte": "Acumulado"}
+    for item in ITENS_METRICA:
+        linha[item] = "-"
+    if df_metricas is None or df_metricas.empty:
+        return pd.DataFrame([linha], columns=colunas)
+    for _, row in df_metricas.iterrows():
+        item = _texto(row.get("Item"))
+        if item in ITENS_METRICA and pd.notna(row.get("Média")):
+            linha[item] = f"{float(row['Média']):.2f} ({int(row.get('N') or 0)})"
+    return pd.DataFrame([linha], columns=colunas)
+
+
+def metricas_pivot_numerico(df_metricas_ciclo: pd.DataFrame) -> pd.DataFrame:
+    """Pivot numérico Ciclo × Critério (para gráficos)."""
+    if df_metricas_ciclo is None or df_metricas_ciclo.empty:
+        return pd.DataFrame()
+    base = df_metricas_ciclo.copy()
+    if "Rotulo" not in base.columns:
+        return pd.DataFrame()
+    pivot = base.pivot_table(index="Rotulo", columns="Item", values="Média", aggfunc="mean")
+    colunas = [c for c in ITENS_METRICA if c in pivot.columns]
+    return pivot.reindex(columns=colunas)
+
+
+def resumo_nps_tabela(nps: "ResumoNps", n_alunos: int) -> pd.DataFrame:
+    """Linha única detalhando o NPS do recorte (espelha a tabela do comparativo)."""
+    return pd.DataFrame(
+        [
+            {
+                "Recorte": "Acumulado",
+                "NPS": nps.nps,
+                "Respondentes": n_alunos,
+                "Respostas NPS": nps.respondentes,
+                "Promotores": f"{nps.promotores} ({nps.pct_promotores}%)",
+                "Neutros": f"{nps.neutros} ({nps.pct_neutros}%)",
+                "Detratores": f"{nps.detratores} ({nps.pct_detratores}%)",
+            }
+        ]
+    )
+
+
+def composicao_nps(nps: "ResumoNps") -> pd.DataFrame:
+    """Distribuição percentual do NPS (para o gráfico do modo acumulado)."""
+    return pd.DataFrame(
+        [
+            {"Categoria": "Promotores", "Respostas": nps.promotores, "%": nps.pct_promotores},
+            {"Categoria": "Neutros", "Respostas": nps.neutros, "%": nps.pct_neutros},
+            {"Categoria": "Detratores", "Respostas": nps.detratores, "%": nps.pct_detratores},
+        ]
+    )
+
+
+def blocos_comentarios(df: pd.DataFrame) -> list[dict]:
+    """Comentários abertos agrupados por ciclo e categoria (uma página por bloco no PDF)."""
+    if df is None or df.empty or "Item" not in df.columns:
+        return []
+    base = df.copy()
+    if "ID_Ciclo" not in base.columns:
+        base["ID_Ciclo"] = ""
+    blocos: list[dict] = []
+    for id_c, grupo in base.groupby("ID_Ciclo", sort=False):
+        nome = _nome_ciclo_grupo(grupo, str(id_c))
+        codigo = _codigo_grupo(grupo)
+        rotulo = rotulo_ciclo_disciplina(nome, codigo)
+        for item in ITENS_TEXTO:
+            textos = textos_abertos(grupo, item)
+            if textos.empty:
+                continue
+            cols = [c for c in ("Aluno", "Texto") if c in textos.columns]
+            blocos.append(
+                {
+                    "id_ciclo": str(id_c).strip(),
+                    "rotulo": rotulo,
+                    "item": item,
+                    "textos": textos[cols].reset_index(drop=True),
+                }
+            )
+    blocos.sort(key=lambda b: (b["rotulo"], ITENS_TEXTO.index(b["item"])))
+    return blocos
+
+
 def _sem_acento(texto: str) -> str:
     nfkd = unicodedata.normalize("NFKD", str(texto or ""))
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
 def _pdf_safe(texto: str, unicode_ok: bool) -> str:
-    """Helvetica no Cloud não aceita travessão/aspas tipográficas; sanitiza sempre."""
+    """Com fonte Unicode mantém o texto; no fallback Helvetica troca travessão/aspas."""
     s = _texto(texto)
+    if unicode_ok:
+        return s
     for origem, destino in (
         ("—", "-"),
         ("–", "-"),
@@ -526,21 +701,48 @@ def _pdf_safe(texto: str, unicode_ok: bool) -> str:
         ("×", "x"),
     ):
         s = s.replace(origem, destino)
-    if not unicode_ok:
-        s = _sem_acento(s)
-        s = s.encode("latin-1", errors="replace").decode("latin-1")
-    return s
+    s = _sem_acento(s)
+    return s.encode("latin-1", errors="replace").decode("latin-1")
 
 
-def _resolver_fonte_pdf(pdf) -> tuple[str, bool]:
-    """Retorna (nome_fonte, unicode). Tenta DejaVu/Arial; senão Helvetica ASCII."""
-    candidatos = [
+_VERDE = (0, 77, 40)
+_DOURADO = (179, 143, 54)
+_CINZA = (242, 242, 242)
+_CORES_NPS = {"Promotores": "#2E7D32", "Neutros": "#B38F36", "Detratores": "#B3261E"}
+
+
+def _caminho_logo() -> str | None:
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for nome in ("logo.png", "logorehagro.jpg"):
+        caminho = os.path.join(raiz, nome)
+        if os.path.isfile(caminho):
+            return caminho
+    return None
+
+
+def _fontes_unicode() -> list[tuple[str, str]]:
+    candidatos: list[tuple[str, str]] = []
+    try:  # o matplotlib distribui a DejaVu, que existe em qualquer ambiente do app
+        import matplotlib
+
+        ttf = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+        candidatos.append(
+            (os.path.join(ttf, "DejaVuSans.ttf"), os.path.join(ttf, "DejaVuSans-Bold.ttf"))
+        )
+    except Exception:
+        pass
+    candidatos += [
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
         ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
         ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"),
         ("/System/Library/Fonts/Supplemental/Arial.ttf", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
     ]
-    for regular, bold in candidatos:
+    return candidatos
+
+
+def _resolver_fonte_pdf(pdf) -> tuple[str, bool]:
+    """Retorna (nome_fonte, unicode). Tenta DejaVu/Arial; senão Helvetica ASCII."""
+    for regular, bold in _fontes_unicode():
         if os.path.isfile(regular):
             try:
                 pdf.add_font("DashFont", "", regular)
@@ -554,6 +756,126 @@ def _resolver_fonte_pdf(pdf) -> tuple[str, bool]:
     return "Helvetica", False
 
 
+def _grafico_barras_png(
+    rotulos: list[str],
+    valores: list[float],
+    *,
+    titulo: str,
+    formato: str = "{:.1f}",
+    limites: tuple[float, float] | None = None,
+    cores: list[str] | str = "#004D28",
+) -> bytes | None:
+    """Barras horizontais com rótulo de dados (None se matplotlib não estiver disponível)."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return None
+
+    pares = [
+        (str(r), float(v))
+        for r, v in zip(rotulos, valores)
+        if v is not None and pd.notna(v)
+    ]
+    if not pares:
+        return None
+    nomes = [p[0] for p in pares]
+    vals = [p[1] for p in pares]
+    altura = max(1.9, 0.42 * len(vals) + 0.9)
+    fig, ax = plt.subplots(figsize=(9.2, altura), dpi=160)
+    barras = ax.barh(nomes, vals, color=cores, height=0.6)
+    ax.invert_yaxis()
+    ax.set_title(titulo, fontsize=11, color="#004D28", loc="left", fontweight="bold")
+    if limites:
+        ax.set_xlim(*limites)
+    elif min(vals) >= 0:
+        ax.set_xlim(0, max(vals) * 1.25 or 1)
+    else:
+        margem = max(abs(min(vals)), abs(max(vals))) * 1.3 or 1
+        ax.set_xlim(-margem, margem)
+        ax.axvline(0, color="#999999", linewidth=0.8)
+    ax.bar_label(barras, labels=[formato.format(v) for v in vals], padding=3, fontsize=9)
+    ax.tick_params(labelsize=9)
+    ax.grid(axis="x", color="#DDDDDD", linewidth=0.6)
+    ax.set_axisbelow(True)
+    for lado in ("top", "right", "left"):
+        ax.spines[lado].set_visible(False)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _grafico_agrupado_png(pivot: pd.DataFrame, *, titulo: str) -> bytes | None:
+    """Barras agrupadas: critérios no eixo X, um grupo por ciclo."""
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return None
+    if pivot is None or pivot.empty:
+        return None
+
+    criterios = [str(c) for c in pivot.columns]
+    ciclos = [str(i) for i in pivot.index]
+    n = max(len(ciclos), 1)
+    largura = min(0.8 / n, 0.3)
+    paleta = ["#004D28", "#B38F36", "#2E7D32", "#7A5C12", "#4C8C5A", "#C0A15A"]
+    fig, ax = plt.subplots(figsize=(9.2, 3.4), dpi=160)
+    posicoes = range(len(criterios))
+    for idx, ciclo in enumerate(ciclos):
+        valores = [
+            None if pd.isna(v) else float(v) for v in pivot.loc[pivot.index[idx]].tolist()
+        ]
+        deslocado = [p + (idx - (n - 1) / 2) * largura for p in posicoes]
+        barras = ax.bar(
+            deslocado,
+            [v or 0 for v in valores],
+            width=largura,
+            label=ciclo,
+            color=paleta[idx % len(paleta)],
+        )
+        ax.bar_label(
+            barras,
+            labels=["-" if v is None else f"{v:.2f}" for v in valores],
+            padding=2,
+            fontsize=7,
+        )
+    ax.set_xticks(list(posicoes))
+    ax.set_xticklabels(criterios, fontsize=9)
+    ax.set_ylim(0, 5.6)
+    ax.set_title(titulo, fontsize=11, color="#004D28", loc="left", fontweight="bold")
+    ax.legend(fontsize=8, frameon=False, ncol=min(len(ciclos), 4))
+    ax.grid(axis="y", color="#DDDDDD", linewidth=0.6)
+    ax.set_axisbelow(True)
+    for lado in ("top", "right"):
+        ax.spines[lado].set_visible(False)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def _fmt_celula(valor) -> str:
+    if valor is None:
+        return "-"
+    try:
+        if pd.isna(valor):
+            return "-"
+    except (TypeError, ValueError):
+        pass
+    if isinstance(valor, float):
+        texto = f"{valor:.2f}"
+        return texto[:-1] if texto.endswith("0") else texto
+    return _texto(valor) or "-"
+
+
 def gerar_pdf_recorte(
     *,
     disciplinas: list[str],
@@ -565,84 +887,246 @@ def gerar_pdf_recorte(
     modo_grafico: str,
     nps_ciclos: pd.DataFrame | None = None,
     metricas_tabela: pd.DataFrame | None = None,
+    salas: list[str] | None = None,
+    metricas_pivot: pd.DataFrame | None = None,
+    didatica_ciclos: pd.DataFrame | None = None,
+    detratores: pd.DataFrame | None = None,
+    comentarios: list[dict] | None = None,
 ) -> bytes:
-    """PDF resumido do recorte filtrado (sem comentários longos)."""
+    """Relatório do recorte: marca no cabeçalho, gráficos, tabelas e comentários por ciclo."""
     from fpdf import FPDF
+    from fpdf.fonts import FontFace
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=14)
-    pdf.add_page()
+    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
+    logo = _caminho_logo()
+
+    class _Relatorio(FPDF):
+        fonte_rel = "Helvetica"
+        titulo_rel = ""
+        subtitulo_rel = ""
+        rodape_rel = ""
+
+        def header(self):
+            deslocamento = 0.0
+            if logo:
+                try:
+                    info = self.image(logo, x=self.l_margin, y=8, h=12)
+                    deslocamento = float(getattr(info, "rendered_width", 0) or 0)
+                except Exception:
+                    deslocamento = 0.0
+            inicio = self.l_margin + (deslocamento + 8 if deslocamento else 0)
+            self.set_xy(inicio, 9)
+            self.set_font(self.fonte_rel, "B", 13)
+            self.set_text_color(*_VERDE)
+            self.cell(0, 6, self.titulo_rel, new_x="LMARGIN", new_y="NEXT")
+            self.set_x(inicio)
+            self.set_font(self.fonte_rel, "", 8)
+            self.set_text_color(105, 105, 105)
+            self.cell(0, 4, self.subtitulo_rel)
+            self.set_draw_color(*_DOURADO)
+            self.set_line_width(0.6)
+            self.line(self.l_margin, 23.5, self.w - self.r_margin, 23.5)
+            self.set_xy(self.l_margin, 28)
+            self.set_text_color(0, 0, 0)
+
+        def footer(self):
+            self.set_y(-12)
+            self.set_font(self.fonte_rel, "", 8)
+            self.set_text_color(130, 130, 130)
+            self.cell(0, 6, f"{self.rodape_rel} | pagina {self.page_no()}/{{nb}}", align="C")
+            self.set_text_color(0, 0, 0)
+
+    pdf = _Relatorio()
+    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.set_top_margin(28)
     fonte, unicode_ok = _resolver_fonte_pdf(pdf)
 
     def t(valor) -> str:
         return _pdf_safe(valor, unicode_ok)
 
-    def titulo(txt: str, size: int = 14):
-        pdf.set_font(fonte, "B", size)
-        pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(pdf.epw, 8, t(txt))
-        pdf.ln(1)
+    pdf.fonte_rel = fonte
+    pdf.titulo_rel = t("Avaliação do curso — resultados")
+    pdf.subtitulo_rel = t(f"Gerado em {agora}")
+    pdf.rodape_rel = t("Rehagro · Gestão do Agronegócio")
+    pdf.add_page()
 
-    def corpo(txt: str, size: int = 10):
+    def titulo(txt: str, size: int = 12, espaco_antes: float = 3.0):
+        if pdf.get_y() > pdf.t_margin:
+            pdf.ln(espaco_antes)
+        if pdf.will_page_break(26):  # evita título órfão no pé da página
+            pdf.add_page()
+        pdf.set_font(fonte, "B", size)
+        pdf.set_text_color(*_VERDE)
+        pdf.set_x(pdf.l_margin)
+        pdf.multi_cell(pdf.epw, 6.5, t(txt))
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(0.5)
+
+    def corpo(txt: str, size: int = 9):
         pdf.set_font(fonte, "", size)
         pdf.set_x(pdf.l_margin)
-        pdf.multi_cell(pdf.epw, 6, t(txt))
+        pdf.multi_cell(pdf.epw, 5, t(txt))
 
-    agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
-    titulo("Dashboard - avaliacao do curso")
-    corpo(f"Gerado em {agora}")
-    corpo(f"Modo de graficos: {modo_grafico}")
-    discs = ", ".join(disciplinas) if disciplinas else "Todas"
-    corpo(f"Disciplina(s): {discs}")
-    pdf.ln(2)
+    def tabela(df: pd.DataFrame, *, larguras=None, tamanho: int = 8, alinhamento="LEFT"):
+        if df is None or df.empty:
+            return
+        pdf.set_font(fonte, "", tamanho)
+        cabecalho = FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=_VERDE)
+        with pdf.table(
+            col_widths=larguras,
+            headings_style=cabecalho,
+            line_height=5.0,
+            text_align=alinhamento,
+            borders_layout="SINGLE_TOP_LINE",
+            cell_fill_color=_CINZA,
+            cell_fill_mode="ROWS",
+            padding=(1.2, 1.6),
+        ) as tbl:
+            linha = tbl.row()
+            for col in df.columns:
+                linha.cell(t(col))
+            for _, registro in df.iterrows():
+                linha = tbl.row()
+                for col in df.columns:
+                    linha.cell(t(_fmt_celula(registro[col])))
+
+    def grafico(png: bytes | None):
+        if not png:
+            return
+        pdf.ln(1)
+        try:
+            pdf.image(io.BytesIO(png), x=pdf.l_margin, w=pdf.epw)
+        except Exception:
+            return
+        pdf.ln(1)
+
+    def cartoes(itens: list[tuple[str, str]]):
+        largura = pdf.epw / len(itens)
+        y = pdf.get_y()
+        for idx, (rotulo, valor) in enumerate(itens):
+            x = pdf.l_margin + idx * largura
+            pdf.set_fill_color(245, 248, 246)
+            pdf.set_draw_color(*_DOURADO)
+            pdf.set_line_width(0.3)
+            pdf.rect(x + 0.8, y, largura - 1.6, 15, style="DF")
+            pdf.set_xy(x + 0.8, y + 1.5)
+            pdf.set_font(fonte, "", 8)
+            pdf.set_text_color(105, 105, 105)
+            pdf.cell(largura - 1.6, 4.5, t(rotulo), align="C")
+            pdf.set_xy(x + 0.8, y + 6.5)
+            pdf.set_font(fonte, "B", 13)
+            pdf.set_text_color(*_VERDE)
+            pdf.cell(largura - 1.6, 7, t(valor), align="C")
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_xy(pdf.l_margin, y + 17)
+
+    # --- Filtros do recorte ---
+    titulo("Recorte analisado", 12, espaco_antes=0)
+    corpo(f"Disciplina(s): {', '.join(disciplinas) if disciplinas else 'Todas'}")
+    corpo(f"Sala(s): {', '.join(salas) if salas else 'Todas'}")
+    corpo(f"Modo: {modo_grafico}")
 
     if ciclos_info is not None and not ciclos_info.empty:
-        titulo("Ciclos do recorte", 12)
-        for _, row in ciclos_info.iterrows():
-            corpo(
-                f"- {row.get('Ciclo')} ({row.get('ID_Ciclo')}): "
-                f"{row.get('Inicio_ciclo')} a {row.get('Fim_ciclo')} "
-                f"(pares: {row.get('Abertura_pares')} a {row.get('Encerramento_pares')})"
-            )
-        pdf.ln(2)
+        periodos = ciclos_info.rename(
+            columns={
+                "Disciplina_ID": "Disc.",
+                "Inicio_ciclo": "Início",
+                "Fim_ciclo": "Fim",
+                "Abertura_pares": "Pares (abre)",
+                "Encerramento_pares": "Pares (fecha)",
+            }
+        )
+        cols = [c for c in ("Disc.", "Ciclo", "Início", "Fim", "Pares (abre)", "Pares (fecha)") if c in periodos.columns]
+        titulo("Período dos ciclos", 11)
+        tabela(periodos[cols])
 
-    titulo("NPS (acumulado do filtro)", 12)
-    nps_txt = f"{nps.nps:.1f}" if nps.nps is not None else "-"
-    corpo(
-        f"NPS: {nps_txt} | Respondentes unicos: {n_alunos} | "
-        f"Base NPS: {nps.respondentes} | "
-        f"Promotores: {nps.promotores} ({nps.pct_promotores}%) | "
-        f"Neutros: {nps.neutros} ({nps.pct_neutros}%) | "
-        f"Detratores: {nps.detratores} ({nps.pct_detratores}%)"
+    # --- NPS ---
+    titulo("NPS do recorte", 12)
+    cartoes(
+        [
+            ("Respondentes", str(n_alunos)),
+            ("NPS", f"{nps.nps:.1f}" if nps.nps is not None else "-"),
+            ("Promotores", f"{nps.promotores} ({nps.pct_promotores}%)"),
+            ("Detratores", f"{nps.detratores} ({nps.pct_detratores}%)"),
+        ]
     )
-    pdf.ln(2)
+    corpo(
+        f"Neutros (7-8): {nps.neutros} ({nps.pct_neutros}%) | "
+        f"base NPS: {nps.respondentes} resposta(s) de {n_alunos} respondente(s)."
+    )
 
-    if nps_ciclos is not None and not nps_ciclos.empty:
-        titulo("NPS por ciclo", 12)
-        for _, row in nps_ciclos.iterrows():
-            val = row.get("NPS")
-            val_txt = f"{val:.1f}" if val is not None and pd.notna(val) else "-"
-            rotulo = row.get("Rotulo") or row.get("Ciclo")
-            corpo(f"- {rotulo}: NPS {val_txt} (n={int(row.get('Respondentes') or 0)})")
-        pdf.ln(2)
+    comparativo = nps_ciclos is not None and not nps_ciclos.empty
+    if comparativo:
+        grafico(
+            _grafico_barras_png(
+                [_texto(r.get("Rotulo")) or _texto(r.get("Ciclo")) for _, r in nps_ciclos.iterrows()],
+                [r.get("NPS") for _, r in nps_ciclos.iterrows()],
+                titulo="NPS por ciclo",
+                formato="{:.1f}",
+            )
+        )
+        cols_nps = [c for c in ("Codigo", "Ciclo", "NPS", "Respondentes", "Promotores", "Neutros", "Detratores") if c in nps_ciclos.columns]
+        tabela(nps_ciclos[cols_nps].rename(columns={"Codigo": "Disc."}))
+    else:
+        comp = composicao_nps(nps)
+        grafico(
+            _grafico_barras_png(
+                comp["Categoria"].tolist(),
+                comp["%"].tolist(),
+                titulo="Composição do NPS (% das respostas)",
+                formato="{:.1f}%",
+                limites=(0, 100),
+                cores=[_CORES_NPS[c] for c in comp["Categoria"]],
+            )
+        )
+        tabela(resumo_nps_tabela(nps, n_alunos))
 
-    if metricas_tabela is not None and not metricas_tabela.empty:
-        titulo("Metricas por ciclo (0-5)", 12)
-        cols = [str(c) for c in metricas_tabela.columns]
-        corpo(" | ".join(cols))
-        for _, row in metricas_tabela.iterrows():
-            corpo(" | ".join(_texto(row.get(c)) or "-" for c in cols))
-        pdf.ln(2)
+    # --- Métricas ---
+    titulo("Métricas do ciclo (0-5)", 12)
+    if metricas_pivot is not None and not metricas_pivot.empty:
+        grafico(_grafico_agrupado_png(metricas_pivot, titulo="Médias por critério"))
     elif metricas is not None and not metricas.empty:
-        titulo("Metricas gerais (0-5)", 12)
-        for _, row in metricas.iterrows():
-            corpo(f"- {row.get('Item')}: media {row.get('Média')} (n={int(row.get('N') or 0)})")
-        pdf.ln(2)
+        grafico(
+            _grafico_barras_png(
+                metricas["Item"].tolist(),
+                metricas["Média"].tolist(),
+                titulo="Médias por critério",
+                formato="{:.2f}",
+                limites=(0, 5),
+            )
+        )
+    if metricas_tabela is not None and not metricas_tabela.empty:
+        tabela(metricas_tabela)
+    elif metricas is not None and not metricas.empty:
+        tabela(metricas_tabela_acumulado(metricas))
 
-    if didatica is not None and not didatica.empty:
-        titulo("Didatica dos professores (0-5)", 12)
-        for _, row in didatica.iterrows():
-            corpo(f"- {row.get('Professor')}: media {row.get('Média')} (n={int(row.get('N') or 0)})")
+    # --- Didática ---
+    titulo("Didática dos professores (0-5)", 12)
+    if didatica_ciclos is not None and not didatica_ciclos.empty:
+        cols_did = [c for c in ("Codigo", "Ciclo", "Professor", "Média", "N") if c in didatica_ciclos.columns]
+        tabela(didatica_ciclos[cols_did].rename(columns={"Codigo": "Disc."}))
+    elif didatica is not None and not didatica.empty:
+        tabela(didatica)
+    else:
+        corpo("Sem avaliações de didática neste recorte.")
+
+    # --- Detratores ---
+    if detratores is not None and not detratores.empty:
+        titulo("Detratores do recorte", 12)
+        cols_det = [c for c in ("Aluno", "Codigo", "Ciclo", "NPS", *ITENS_METRICA) if c in detratores.columns]
+        tabela(detratores[cols_det].rename(columns={"Codigo": "Disc."}), tamanho=7)
+
+    # --- Comentários abertos: uma página por ciclo e categoria ---
+    for bloco in comentarios or []:
+        textos = bloco.get("textos")
+        if textos is None or textos.empty:
+            continue
+        pdf.add_page()
+        titulo(f"{bloco.get('item')} — {bloco.get('rotulo')}", 13, espaco_antes=0)
+        corpo(f"{len(textos)} comentário(s).")
+        pdf.ln(1)
+        larguras = (28, 72) if "Aluno" in textos.columns else None
+        tabela(textos, larguras=larguras, tamanho=8)
 
     buf = io.BytesIO()
     pdf.output(buf)

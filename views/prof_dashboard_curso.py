@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -12,18 +13,26 @@ from domain.dashboard_curso import (
     ITENS_METRICA,
     ITENS_TEXTO,
     anexar_codigo_disciplina,
+    anexar_sala,
+    blocos_comentarios,
     carregar_respostas_curso,
+    composicao_nps,
     contagem_respondentes,
     detalhe_avaliacao_por_aluno,
+    didatica_por_ciclo,
     filtrar_respostas,
     gerar_pdf_recorte,
     mapa_disciplina_codigo,
     media_didatica_professores,
     media_itens_metricas,
     metricas_comparativo_tabela,
+    metricas_pivot_numerico,
     metricas_por_ciclo,
+    metricas_tabela_acumulado,
     nps_do_recorte,
     nps_por_ciclo,
+    resumo_nps_tabela,
+    salas_disponiveis,
     tabela_periodos_ciclos,
     textos_abertos,
 )
@@ -104,6 +113,29 @@ def _opcoes_ciclos(
     return opcoes
 
 
+def _grafico_barras(
+    df: pd.DataFrame,
+    *,
+    campo_rotulo: str,
+    campo_valor: str,
+    titulo_valor: str,
+    formato: str = ".1f",
+    dominio: list[float] | None = None,
+    cor: str = "#004D28",
+) -> alt.Chart:
+    """Barras horizontais com rótulo de dados (Altair, para não perder o valor exato)."""
+    escala = alt.Scale(domain=dominio) if dominio else alt.Scale()
+    base = alt.Chart(df).encode(
+        y=alt.Y(f"{campo_rotulo}:N", sort=None, title=None),
+        x=alt.X(f"{campo_valor}:Q", title=titulo_valor, scale=escala),
+    )
+    barras = base.mark_bar(color=cor, size=18)
+    rotulos = base.mark_text(align="left", dx=4, fontSize=12).encode(
+        text=alt.Text(f"{campo_valor}:Q", format=formato)
+    )
+    return (barras + rotulos).properties(height=alt.Step(28))
+
+
 def render(usuario: dict):
     st.header("Dashboard — avaliação do curso")
     st.caption(
@@ -120,6 +152,10 @@ def render(usuario: dict):
     df_disc = ler_aba("Disciplinas")
     df_ciclos = ler_aba("Ciclos")
     df = anexar_codigo_disciplina(df, mapa_disciplina_codigo(df_disc))
+    try:
+        df = anexar_sala(df, ler_aba("Entrancia_Turma"))
+    except Exception:
+        df["Sala"] = ""
 
     disciplinas = _disciplinas_disponiveis(df, df_disc)
     default_disc = _default_disciplinas(disciplinas, df_disc)
@@ -130,6 +166,18 @@ def render(usuario: dict):
         default=default_disc,
         key="dash_curso_discs",
         help="Deixe vazio para todas as disciplinas com resposta.",
+    )
+
+    salas = salas_disponiveis(filtrar_respostas(df, disciplina=discs_sel or None))
+    salas_sel = st.multiselect(
+        "Salas:",
+        options=salas,
+        default=[],
+        key="dash_curso_salas",
+        help=(
+            "A sala vem da Entrância (aluno × disciplina). Deixe vazio para todas; "
+            "respostas de alunos sem sala cadastrada só aparecem no filtro vazio."
+        ),
     )
 
     opcoes_ciclo = _opcoes_ciclos(df, df_ciclos, df_disc, discs_sel)
@@ -160,6 +208,7 @@ def render(usuario: dict):
         df,
         id_ciclo=ids_ciclo_sel or None,
         disciplina=discs_sel or None,
+        sala=salas_sel or None,
     )
     if recorte.empty:
         st.info("Nenhuma resposta neste filtro.")
@@ -189,9 +238,11 @@ def render(usuario: dict):
     nps = nps_do_recorte(recorte)
     metricas = media_itens_metricas(recorte)
     didatica = media_didatica_professores(recorte)
+    didatica_ciclos = didatica_por_ciclo(recorte)
     nps_ciclos = nps_por_ciclo(recorte)
     met_ciclos = metricas_por_ciclo(recorte)
     met_tabela = metricas_comparativo_tabela(met_ciclos)
+    met_tabela_acum = metricas_tabela_acumulado(metricas)
     detalhe_alunos = detalhe_avaliacao_por_aluno(recorte)
 
     m1, m2, m3, m4 = st.columns(4)
@@ -209,8 +260,16 @@ def render(usuario: dict):
         if nps_ciclos.empty:
             st.caption("Sem NPS por ciclo neste recorte.")
         else:
-            chart_nps = nps_ciclos.set_index("Rotulo")[["NPS"]].copy()
-            st.bar_chart(chart_nps)
+            st.altair_chart(
+                _grafico_barras(
+                    nps_ciclos,
+                    campo_rotulo="Rotulo",
+                    campo_valor="NPS",
+                    titulo_valor="NPS",
+                    dominio=[-100, 100],
+                ),
+                use_container_width=True,
+            )
             st.dataframe(
                 nps_ciclos[
                     ["Codigo", "Ciclo", "NPS", "Respondentes", "Promotores", "Neutros", "Detratores"]
@@ -226,18 +285,58 @@ def render(usuario: dict):
         else:
             st.dataframe(met_tabela, width="stretch", hide_index=True)
     else:
-        st.subheader("Métricas gerais (0–5) — acumulado")
+        st.subheader("NPS — acumulado do filtro")
+        composicao = composicao_nps(nps)
+        if nps.respondentes == 0:
+            st.caption("Sem respostas de NPS neste recorte.")
+        else:
+            st.altair_chart(
+                _grafico_barras(
+                    composicao,
+                    campo_rotulo="Categoria",
+                    campo_valor="%",
+                    titulo_valor="% das respostas de NPS",
+                    dominio=[0, 100],
+                ),
+                use_container_width=True,
+            )
+            st.dataframe(
+                resumo_nps_tabela(nps, n_alunos),
+                width="stretch",
+                hide_index=True,
+            )
+
+        st.subheader("Métricas do ciclo (0–5) — acumulado")
+        st.caption("Critérios nas colunas; valor = média (N) de todas as respostas do filtro.")
         if metricas.empty:
             st.caption("Sem notas de métricas neste recorte.")
         else:
-            st.dataframe(metricas, width="stretch", hide_index=True)
-            st.bar_chart(metricas.set_index("Item")["Média"])
+            st.dataframe(met_tabela_acum, width="stretch", hide_index=True)
+            st.altair_chart(
+                _grafico_barras(
+                    metricas,
+                    campo_rotulo="Item",
+                    campo_valor="Média",
+                    titulo_valor="Média (0–5)",
+                    formato=".2f",
+                    dominio=[0, 5],
+                ),
+                use_container_width=True,
+            )
 
-    st.subheader("Didática dos professores (0–5) — acumulado do filtro")
-    if didatica.empty:
+    st.subheader("Didática dos professores (0–5) — por ciclo")
+    if didatica_ciclos.empty:
         st.caption("Sem avaliações de didática neste recorte.")
     else:
-        st.dataframe(didatica, width="stretch", hide_index=True)
+        st.dataframe(
+            didatica_ciclos[["Codigo", "Ciclo", "Professor", "Média", "N"]].rename(
+                columns={"Codigo": "Código"}
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        with st.expander("Ver acumulado por professor (todos os ciclos do filtro)"):
+            st.dataframe(didatica, width="stretch", hide_index=True)
 
     st.subheader("Detalhamento por aluno")
     st.caption(
@@ -301,6 +400,7 @@ def render(usuario: dict):
         met_tabela.to_excel(writer, index=False, sheet_name="Metricas_comparativo")
         met_ciclos.to_excel(writer, index=False, sheet_name="Metricas_por_ciclo")
         didatica.to_excel(writer, index=False, sheet_name="Didatica")
+        didatica_ciclos.to_excel(writer, index=False, sheet_name="Didatica_por_ciclo")
         detalhe_alunos.to_excel(writer, index=False, sheet_name="Por_aluno")
         pd.DataFrame(
             [
@@ -327,23 +427,41 @@ def render(usuario: dict):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
     with c_dl2:
-        try:
-            pdf_bytes = gerar_pdf_recorte(
-                disciplinas=discs_sel,
-                ciclos_info=periodos,
-                nps=nps,
-                n_alunos=n_alunos,
-                metricas=metricas,
-                didatica=didatica,
-                modo_grafico=modo,
-                nps_ciclos=nps_ciclos if modo == "Comparar ciclos" else None,
-                metricas_tabela=met_tabela if modo == "Comparar ciclos" else None,
-            )
-            st.download_button(
-                "Baixar PDF do recorte",
-                data=pdf_bytes,
-                file_name="dashboard_avaliacao_curso.pdf",
-                mime="application/pdf",
-            )
-        except Exception as exc:
-            st.caption(f"PDF indisponível neste ambiente ({exc}). Use o Excel.")
+        comparativo = modo == "Comparar ciclos"
+        # O PDF com gráficos é caro: só monta quando pedido, não a cada rerun do filtro.
+        preparar = st.checkbox("Preparar PDF do recorte", key="dash_curso_pdf_on")
+        if not preparar:
+            st.caption("Marque para montar o relatório em PDF (gráficos + comentários por ciclo).")
+        else:
+            try:
+                with st.spinner("Montando o relatório..."):
+                    pdf_bytes = gerar_pdf_recorte(
+                        disciplinas=discs_sel,
+                        salas=salas_sel,
+                        ciclos_info=periodos,
+                        nps=nps,
+                        n_alunos=n_alunos,
+                        metricas=metricas,
+                        didatica=didatica,
+                        modo_grafico=modo,
+                        nps_ciclos=nps_ciclos if comparativo else None,
+                        metricas_tabela=met_tabela if comparativo else met_tabela_acum,
+                        metricas_pivot=(
+                            metricas_pivot_numerico(met_ciclos) if comparativo else None
+                        ),
+                        didatica_ciclos=didatica_ciclos,
+                        detratores=(
+                            detalhe_alunos[detalhe_alunos["Categoria"] == "Detrator"]
+                            if not detalhe_alunos.empty
+                            else None
+                        ),
+                        comentarios=blocos_comentarios(recorte),
+                    )
+                st.download_button(
+                    "Baixar PDF do recorte",
+                    data=pdf_bytes,
+                    file_name="dashboard_avaliacao_curso.pdf",
+                    mime="application/pdf",
+                )
+            except Exception as exc:
+                st.caption(f"PDF indisponível neste ambiente ({exc}). Use o Excel.")

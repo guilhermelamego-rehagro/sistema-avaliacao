@@ -283,7 +283,7 @@ def media_didatica_professores(df: pd.DataFrame) -> pd.DataFrame:
         bloco.groupby("Professor")["Resposta"]
         .agg(Média="mean", N="count")
         .reset_index()
-        .sort_values("Média", ascending=False)
+        .sort_values("Professor", kind="stable")
     )
     agg["Média"] = agg["Média"].round(2)
     return agg
@@ -591,7 +591,17 @@ def didatica_por_ciclo(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(linhas, columns=cols)
     if out.empty:
         return out
-    return out.sort_values(["Codigo", "Ciclo", "Média"], ascending=[True, True, False]).reset_index(drop=True)
+    return out.sort_values(
+        ["Codigo", "Ciclo", "Professor"], kind="stable"
+    ).reset_index(drop=True)
+
+
+def dominio_eixo_nps(valores) -> list[float]:
+    """0–100 se não houver NPS negativo; -100–100 só quando algum valor for < 0."""
+    serie = pd.to_numeric(pd.Series(valores), errors="coerce").dropna()
+    if not serie.empty and float(serie.min()) < 0:
+        return [-100.0, 100.0]
+    return [0.0, 100.0]
 
 
 def metricas_tabela_acumulado(df_metricas: pd.DataFrame) -> pd.DataFrame:
@@ -876,6 +886,16 @@ def _fmt_celula(valor) -> str:
     return _texto(valor) or "-"
 
 
+SECOES_PDF = (
+    ("periodos", "Período dos ciclos"),
+    ("nps", "NPS"),
+    ("metricas", "Métricas do ciclo"),
+    ("didatica", "Didática dos professores"),
+    ("detratores", "Detalhamento de detratores"),
+    ("comentarios", "Comentários abertos"),
+)
+
+
 def gerar_pdf_recorte(
     *,
     disciplinas: list[str],
@@ -892,10 +912,15 @@ def gerar_pdf_recorte(
     didatica_ciclos: pd.DataFrame | None = None,
     detratores: pd.DataFrame | None = None,
     comentarios: list[dict] | None = None,
+    secoes: dict[str, bool] | None = None,
 ) -> bytes:
     """Relatório do recorte: marca no cabeçalho, gráficos, tabelas e comentários por ciclo."""
     from fpdf import FPDF
     from fpdf.fonts import FontFace
+
+    ativas = {chave: True for chave, _ in SECOES_PDF}
+    if secoes:
+        ativas.update({k: bool(v) for k, v in secoes.items() if k in ativas})
 
     agora = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%d/%m/%Y %H:%M")
     logo = _caminho_logo()
@@ -1025,8 +1050,11 @@ def gerar_pdf_recorte(
     corpo(f"Disciplina(s): {', '.join(disciplinas) if disciplinas else 'Todas'}")
     corpo(f"Sala(s): {', '.join(salas) if salas else 'Todas'}")
     corpo(f"Modo: {modo_grafico}")
+    ocultas = [rotulo for chave, rotulo in SECOES_PDF if not ativas.get(chave, True)]
+    if ocultas:
+        corpo(f"Seções omitidas neste relatório: {', '.join(ocultas)}.")
 
-    if ciclos_info is not None and not ciclos_info.empty:
+    if ativas["periodos"] and ciclos_info is not None and not ciclos_info.empty:
         periodos = ciclos_info.rename(
             columns={
                 "Disciplina_ID": "Disc.",
@@ -1041,92 +1069,107 @@ def gerar_pdf_recorte(
         tabela(periodos[cols])
 
     # --- NPS ---
-    titulo("NPS do recorte", 12)
-    cartoes(
-        [
-            ("Respondentes", str(n_alunos)),
-            ("NPS", f"{nps.nps:.1f}" if nps.nps is not None else "-"),
-            ("Promotores", f"{nps.promotores} ({nps.pct_promotores}%)"),
-            ("Detratores", f"{nps.detratores} ({nps.pct_detratores}%)"),
-        ]
-    )
-    corpo(
-        f"Neutros (7-8): {nps.neutros} ({nps.pct_neutros}%) | "
-        f"base NPS: {nps.respondentes} resposta(s) de {n_alunos} respondente(s)."
-    )
+    if ativas["nps"]:
+        titulo("NPS do recorte", 12)
+        cartoes(
+            [
+                ("Respondentes", str(n_alunos)),
+                ("NPS", f"{nps.nps:.1f}" if nps.nps is not None else "-"),
+                ("Promotores", f"{nps.promotores} ({nps.pct_promotores}%)"),
+                ("Detratores", f"{nps.detratores} ({nps.pct_detratores}%)"),
+            ]
+        )
+        corpo(
+            f"Neutros (7-8): {nps.neutros} ({nps.pct_neutros}%) | "
+            f"base NPS: {nps.respondentes} resposta(s) de {n_alunos} respondente(s)."
+        )
 
-    comparativo = nps_ciclos is not None and not nps_ciclos.empty
-    if comparativo:
-        grafico(
-            _grafico_barras_png(
-                [_texto(r.get("Rotulo")) or _texto(r.get("Ciclo")) for _, r in nps_ciclos.iterrows()],
-                [r.get("NPS") for _, r in nps_ciclos.iterrows()],
-                titulo="NPS por ciclo",
-                formato="{:.1f}",
+        comparativo = nps_ciclos is not None and not nps_ciclos.empty
+        if comparativo:
+            vals_nps = [r.get("NPS") for _, r in nps_ciclos.iterrows()]
+            lim_inf, lim_sup = dominio_eixo_nps(vals_nps)
+            grafico(
+                _grafico_barras_png(
+                    [_texto(r.get("Rotulo")) or _texto(r.get("Ciclo")) for _, r in nps_ciclos.iterrows()],
+                    vals_nps,
+                    titulo="NPS por ciclo",
+                    formato="{:.1f}",
+                    limites=(lim_inf, lim_sup),
+                )
             )
-        )
-        cols_nps = [c for c in ("Codigo", "Ciclo", "NPS", "Respondentes", "Promotores", "Neutros", "Detratores") if c in nps_ciclos.columns]
-        tabela(nps_ciclos[cols_nps].rename(columns={"Codigo": "Disc."}))
-    else:
-        comp = composicao_nps(nps)
-        grafico(
-            _grafico_barras_png(
-                comp["Categoria"].tolist(),
-                comp["%"].tolist(),
-                titulo="Composição do NPS (% das respostas)",
-                formato="{:.1f}%",
-                limites=(0, 100),
-                cores=[_CORES_NPS[c] for c in comp["Categoria"]],
+            cols_nps = [
+                c
+                for c in ("Codigo", "Ciclo", "NPS", "Respondentes", "Promotores", "Neutros", "Detratores")
+                if c in nps_ciclos.columns
+            ]
+            tabela(nps_ciclos[cols_nps].rename(columns={"Codigo": "Disc."}))
+        else:
+            comp = composicao_nps(nps)
+            grafico(
+                _grafico_barras_png(
+                    comp["Categoria"].tolist(),
+                    comp["%"].tolist(),
+                    titulo="Composição do NPS (% das respostas)",
+                    formato="{:.1f}%",
+                    limites=(0, 100),
+                    cores=[_CORES_NPS[c] for c in comp["Categoria"]],
+                )
             )
-        )
-        tabela(resumo_nps_tabela(nps, n_alunos))
+            tabela(resumo_nps_tabela(nps, n_alunos))
 
     # --- Métricas ---
-    titulo("Métricas do ciclo (0-5)", 12)
-    if metricas_pivot is not None and not metricas_pivot.empty:
-        grafico(_grafico_agrupado_png(metricas_pivot, titulo="Médias por critério"))
-    elif metricas is not None and not metricas.empty:
-        grafico(
-            _grafico_barras_png(
-                metricas["Item"].tolist(),
-                metricas["Média"].tolist(),
-                titulo="Médias por critério",
-                formato="{:.2f}",
-                limites=(0, 5),
+    if ativas["metricas"]:
+        titulo("Métricas do ciclo (0-5)", 12)
+        if metricas_pivot is not None and not metricas_pivot.empty:
+            grafico(_grafico_agrupado_png(metricas_pivot, titulo="Médias por critério"))
+        elif metricas is not None and not metricas.empty:
+            grafico(
+                _grafico_barras_png(
+                    metricas["Item"].tolist(),
+                    metricas["Média"].tolist(),
+                    titulo="Médias por critério",
+                    formato="{:.2f}",
+                    limites=(0, 5),
+                )
             )
-        )
-    if metricas_tabela is not None and not metricas_tabela.empty:
-        tabela(metricas_tabela)
-    elif metricas is not None and not metricas.empty:
-        tabela(metricas_tabela_acumulado(metricas))
+        if metricas_tabela is not None and not metricas_tabela.empty:
+            tabela(metricas_tabela)
+        elif metricas is not None and not metricas.empty:
+            tabela(metricas_tabela_acumulado(metricas))
 
     # --- Didática ---
-    titulo("Didática dos professores (0-5)", 12)
-    if didatica_ciclos is not None and not didatica_ciclos.empty:
-        cols_did = [c for c in ("Codigo", "Ciclo", "Professor", "Média", "N") if c in didatica_ciclos.columns]
-        tabela(didatica_ciclos[cols_did].rename(columns={"Codigo": "Disc."}))
-    elif didatica is not None and not didatica.empty:
-        tabela(didatica)
-    else:
-        corpo("Sem avaliações de didática neste recorte.")
+    if ativas["didatica"]:
+        titulo("Didática dos professores (0-5)", 12)
+        if didatica_ciclos is not None and not didatica_ciclos.empty:
+            cols_did = [
+                c for c in ("Codigo", "Ciclo", "Professor", "Média", "N") if c in didatica_ciclos.columns
+            ]
+            tabela(didatica_ciclos[cols_did].rename(columns={"Codigo": "Disc."}))
+        elif didatica is not None and not didatica.empty:
+            tabela(didatica)
+        else:
+            corpo("Sem avaliações de didática neste recorte.")
 
     # --- Detratores ---
-    if detratores is not None and not detratores.empty:
+    if ativas["detratores"] and detratores is not None and not detratores.empty:
         titulo("Detratores do recorte", 12)
-        cols_det = [c for c in ("Aluno", "Codigo", "Ciclo", "NPS", *ITENS_METRICA) if c in detratores.columns]
+        cols_det = [
+            c for c in ("Aluno", "Codigo", "Ciclo", "NPS", *ITENS_METRICA) if c in detratores.columns
+        ]
         tabela(detratores[cols_det].rename(columns={"Codigo": "Disc."}), tamanho=7)
 
     # --- Comentários abertos: uma página por ciclo e categoria ---
-    for bloco in comentarios or []:
-        textos = bloco.get("textos")
-        if textos is None or textos.empty:
-            continue
-        pdf.add_page()
-        titulo(f"{bloco.get('item')} — {bloco.get('rotulo')}", 13, espaco_antes=0)
-        corpo(f"{len(textos)} comentário(s).")
-        pdf.ln(1)
-        larguras = (28, 72) if "Aluno" in textos.columns else None
-        tabela(textos, larguras=larguras, tamanho=8)
+    if ativas["comentarios"]:
+        for bloco in comentarios or []:
+            textos = bloco.get("textos")
+            if textos is None or textos.empty:
+                continue
+            pdf.add_page()
+            titulo(f"{bloco.get('item')} — {bloco.get('rotulo')}", 13, espaco_antes=0)
+            corpo(f"{len(textos)} comentário(s).")
+            pdf.ln(1)
+            larguras = (28, 72) if "Aluno" in textos.columns else None
+            tabela(textos, larguras=larguras, tamanho=8)
 
     buf = io.BytesIO()
     pdf.output(buf)

@@ -12,6 +12,7 @@ from data.sheets import ler_aba
 from domain.dashboard_curso import (
     ITENS_METRICA,
     ITENS_TEXTO,
+    SECOES_PDF,
     anexar_codigo_disciplina,
     anexar_sala,
     blocos_comentarios,
@@ -20,6 +21,7 @@ from domain.dashboard_curso import (
     contagem_respondentes,
     detalhe_avaliacao_por_aluno,
     didatica_por_ciclo,
+    dominio_eixo_nps,
     filtrar_respostas,
     gerar_pdf_recorte,
     mapa_disciplina_codigo,
@@ -266,7 +268,7 @@ def render(usuario: dict):
                     campo_rotulo="Rotulo",
                     campo_valor="NPS",
                     titulo_valor="NPS",
-                    dominio=[-100, 100],
+                    dominio=dominio_eixo_nps(nps_ciclos["NPS"]),
                 ),
                 use_container_width=True,
             )
@@ -431,37 +433,72 @@ def render(usuario: dict):
         # O PDF com gráficos é caro: só monta quando pedido, não a cada rerun do filtro.
         preparar = st.checkbox("Preparar PDF do recorte", key="dash_curso_pdf_on")
         if not preparar:
-            st.caption("Marque para montar o relatório em PDF (gráficos + comentários por ciclo).")
+            st.session_state.pop("dash_curso_pdf_bytes", None)
+            st.caption(
+                "Marque para montar o relatório em PDF. "
+                "Você escolhe quais seções entram (útil para clientes externos)."
+            )
         else:
-            try:
-                with st.spinner("Montando o relatório..."):
-                    pdf_bytes = gerar_pdf_recorte(
-                        disciplinas=discs_sel,
-                        salas=salas_sel,
-                        ciclos_info=periodos,
-                        nps=nps,
-                        n_alunos=n_alunos,
-                        metricas=metricas,
-                        didatica=didatica,
-                        modo_grafico=modo,
-                        nps_ciclos=nps_ciclos if comparativo else None,
-                        metricas_tabela=met_tabela if comparativo else met_tabela_acum,
-                        metricas_pivot=(
-                            metricas_pivot_numerico(met_ciclos) if comparativo else None
-                        ),
-                        didatica_ciclos=didatica_ciclos,
-                        detratores=(
-                            detalhe_alunos[detalhe_alunos["Categoria"] == "Detrator"]
-                            if not detalhe_alunos.empty
-                            else None
-                        ),
-                        comentarios=blocos_comentarios(recorte),
+            st.caption(
+                "Desmarque o que não quiser no PDF (ex.: detratores e comentários "
+                "em relatório corporativo)."
+            )
+            # Sensíveis desmarcados por padrão; núcleo analítico marcado.
+            defaults_pdf = {
+                "periodos": True,
+                "nps": True,
+                "metricas": True,
+                "didatica": True,
+                "detratores": False,
+                "comentarios": False,
+            }
+            secoes_sel: dict[str, bool] = {}
+            cols_sec = st.columns(3)
+            for i, (chave, rotulo) in enumerate(SECOES_PDF):
+                with cols_sec[i % 3]:
+                    secoes_sel[chave] = st.checkbox(
+                        rotulo,
+                        value=defaults_pdf.get(chave, True),
+                        key=f"dash_curso_pdf_sec_{chave}",
                     )
+            if not any(secoes_sel.values()):
+                st.warning("Selecione ao menos uma seção para o PDF.")
+            elif st.button("Montar PDF", key="dash_curso_pdf_build", type="primary"):
+                try:
+                    with st.spinner("Montando o relatório..."):
+                        pdf_bytes = gerar_pdf_recorte(
+                            disciplinas=discs_sel,
+                            salas=salas_sel,
+                            ciclos_info=periodos,
+                            nps=nps,
+                            n_alunos=n_alunos,
+                            metricas=metricas,
+                            didatica=didatica,
+                            modo_grafico=modo,
+                            nps_ciclos=nps_ciclos if comparativo else None,
+                            metricas_tabela=met_tabela if comparativo else met_tabela_acum,
+                            metricas_pivot=(
+                                metricas_pivot_numerico(met_ciclos) if comparativo else None
+                            ),
+                            didatica_ciclos=didatica_ciclos,
+                            detratores=(
+                                detalhe_alunos[detalhe_alunos["Categoria"] == "Detrator"]
+                                if not detalhe_alunos.empty
+                                else None
+                            ),
+                            comentarios=blocos_comentarios(recorte),
+                            secoes=secoes_sel,
+                        )
+                    st.session_state["dash_curso_pdf_bytes"] = pdf_bytes
+                except Exception as exc:
+                    st.session_state.pop("dash_curso_pdf_bytes", None)
+                    st.caption(f"PDF indisponível neste ambiente ({exc}). Use o Excel.")
+            pdf_pronto = st.session_state.get("dash_curso_pdf_bytes")
+            if pdf_pronto:
                 st.download_button(
                     "Baixar PDF do recorte",
-                    data=pdf_bytes,
+                    data=pdf_pronto,
                     file_name="dashboard_avaliacao_curso.pdf",
                     mime="application/pdf",
+                    key="dash_curso_pdf_dl",
                 )
-            except Exception as exc:
-                st.caption(f"PDF indisponível neste ambiente ({exc}). Use o Excel.")

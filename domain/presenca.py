@@ -357,6 +357,7 @@ def _compilar_grid_de_matriz(
         ].sort_values("Data")
         futuro = grupo[grupo["Status_Tecnico"] == "Futuro"]
         pres = len(vivido[vivido["Status_Aluno"] == "Presente"])
+        faltas = len(vivido[vivido["Status_Aluno"] == "Falta"])
         total_vivido = len(vivido)
         pct_real = (pres / total_vivido * 100) if total_vivido > 0 else 100.0
         pct_proj = ((pres + len(futuro)) / len(grupo) * 100) if len(grupo) > 0 else 100.0
@@ -371,6 +372,7 @@ def _compilar_grid_de_matriz(
                 "Grupo": str(aluno["Grupo"]),
                 "% Realizado": float(pct_real),
                 "% Projetado": float(pct_proj),
+                "Faltas": int(faltas),
                 "Faltas seguidas": int(seguidas),
             }
         )

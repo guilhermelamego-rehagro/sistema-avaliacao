@@ -7,6 +7,7 @@ from domain.anotacoes_daily import datas_dailies_disciplina
 from domain.ciclos import hoje_normalizado, obter_disciplina_ativa
 from navigation import (
     ROTA_COORD_CONFERIR,
+    ROTA_DASHBOARD_CURSO,
     ROTA_FREQ_PROGRAMACAO,
     ROTA_IMPORT_CANVAS,
     ROTA_LANCAR_BANCA,
@@ -106,6 +107,12 @@ def render(usuario: dict):
             ROTA_MODERACAO,
             "home_prof_mod",
         )
+        _atalho(
+            "Dashboard avaliação do curso",
+            "NPS, métricas e comentários por ciclo.",
+            ROTA_DASHBOARD_CURSO,
+            "home_prof_dash_curso",
+        )
 
     if usuario_e_coordenador(usuario) and st.session_state.get("modo_coordenador"):
         st.subheader("Coordenação")
@@ -116,6 +123,13 @@ def render(usuario: dict):
             ROTA_COORD_CONFERIR,
             "home_coord_conf",
         )
+        if not professor_e_orientador(usuario):
+            _atalho(
+                "Dashboard avaliação do curso",
+                "NPS, métricas e comentários por ciclo.",
+                ROTA_DASHBOARD_CURSO,
+                "home_coord_dash_curso",
+            )
     elif usuario_e_coordenador(usuario):
         st.caption("Ative **Modo coordenador** na barra lateral para configurações e conferência de notas.")
 

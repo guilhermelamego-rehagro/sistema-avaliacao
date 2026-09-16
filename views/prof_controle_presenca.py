@@ -456,4 +456,5 @@ def render(usuario: dict, tipo: str = "aulas"):
             "**Gera_Presenca = Não**: situação/status que não entram no controle operacional "
             "(ex.: desistente, aprovado, formado) — permanecem na lista completa para MEC/auditoria."
         )
+    st.caption(f"{len(df_final)} aluno(s) no filtro selecionado.")
     st.dataframe(df_final, width="stretch", column_config=config_colunas)

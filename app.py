@@ -1411,7 +1411,10 @@ else:
     elif menu == ROTA_COORD_CONFERIR and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_coordenador_entregas.render(aluno)
 
-    elif menu == ROTA_DASHBOARD_CURSO and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
+    elif menu == ROTA_DASHBOARD_CURSO and perfil == "Professor" and (
+        professor_e_orientador(aluno)
+        or (usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+    ):
         prof_dashboard_curso.render(aluno)
 
     # =========================================================

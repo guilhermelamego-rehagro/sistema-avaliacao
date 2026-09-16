@@ -70,6 +70,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_ANOTACOES_DAILY,
         ROTA_ORDEM_APRESENTACAO,
         ROTA_COORD_CONFIG,
+        ROTA_DASHBOARD_CURSO,
     }
 )
 
@@ -176,6 +177,9 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     itens_avaliacoes.append(ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"))
     if professor_e_orientador(usuario) or modo_coordenador:
         itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+        itens_avaliacoes.append(
+            ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso")
+        )
     itens_avaliacoes.extend(
         [
             ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
@@ -211,7 +215,6 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
             ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
             ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
             ItemMenu(ROTA_COORD_CONFERIR, "Conferir notas grupos"),
-            ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso"),
         ]
         from auth.supabase_auth import ambiente_app
 

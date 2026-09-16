@@ -1,4 +1,4 @@
-"""Dashboard de resultados da avaliação do curso (coordenação)."""
+"""Dashboard de resultados da avaliação do curso (coordenação e orientadores)."""
 
 from __future__ import annotations
 

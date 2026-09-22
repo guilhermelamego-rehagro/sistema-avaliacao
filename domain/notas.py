@@ -336,6 +336,61 @@ def _coluna_unica(base: str, usados: set[str]) -> str:
     return out
 
 
+def _anexar_turma_base_alunos(alunos: pd.DataFrame) -> pd.DataFrame:
+    """
+    Turma de ingresso vem da Base_Alunos (provisório até a ficha no Supabase).
+    A Entrância nem sempre traz Turma_Ingresso preenchida.
+    """
+    if alunos is None or alunos.empty:
+        return alunos
+    out = alunos.copy()
+    try:
+        base = ler_aba("Base_Alunos")
+    except Exception:
+        base = pd.DataFrame()
+    if base is None or base.empty:
+        if "Turma_Ingresso" not in out.columns:
+            out["Turma_Ingresso"] = ""
+        return out
+    col_email = next(
+        (c for c in ("Email_Pessoal", "Email", "E-mail") if c in base.columns),
+        None,
+    )
+    col_turma = next(
+        (c for c in ("Turma_Ingresso", "Turma", "Turma Ingresso") if c in base.columns),
+        None,
+    )
+    if not col_email or not col_turma:
+        if "Turma_Ingresso" not in out.columns:
+            out["Turma_Ingresso"] = ""
+        return out
+
+    mapa = (
+        base[[col_email, col_turma]]
+        .assign(
+            _em=lambda d: d[col_email].astype(str).str.strip().str.lower(),
+            Turma_Ingresso=lambda d: d[col_turma]
+            .astype(str)
+            .str.strip()
+            .replace({"nan": "", "None": "", "—": "", "–": ""}),
+        )
+        .drop_duplicates(subset=["_em"], keep="first")
+        .set_index("_em")["Turma_Ingresso"]
+        .to_dict()
+    )
+    emails = out["Email_Pessoal"].astype(str).str.strip().str.lower()
+    # Preferência: Base_Alunos; se vazio, mantém o que já vier da Entrância.
+    da_entrancia = (
+        out["Turma_Ingresso"].astype(str).str.strip()
+        if "Turma_Ingresso" in out.columns
+        else pd.Series([""] * len(out), index=out.index)
+    )
+    da_entrancia = da_entrancia.replace({"nan": "", "None": "", "—": "", "–": ""})
+    da_base = emails.map(lambda e: str(mapa.get(e, "") or "").strip())
+    out["Turma_Ingresso"] = da_base.where(da_base.ne(""), da_entrancia)
+    return out
+
+
 def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
     """
     Monta tabela de boletins da disciplina para a tela de liberação de notas.
@@ -359,6 +414,7 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
     # Um vínculo por e-mail (primeira ocorrência).
     alunos["Email_Limpo"] = alunos["Email_Pessoal"].astype(str).str.strip().str.lower()
     alunos = alunos.drop_duplicates(subset=["Email_Limpo"], keep="first")
+    alunos = _anexar_turma_base_alunos(alunos)
 
     dfs_cache = carregar_base_presenca()
     df_freq, _ = compilar_grid_frequencia(id_disc, alunos, dfs_cache=dfs_cache)
@@ -378,7 +434,9 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
         email = str(aluno["Email_Pessoal"]).strip()
         email_l = email.lower()
         nome = str(aluno.get("Nome_Completo", "")).strip()
-        turma = str(aluno.get("Turma_Ingresso", "")).strip() or "—"
+        turma = str(aluno.get("Turma_Ingresso", "")).strip()
+        if turma.lower() in {"nan", "none", "—", "–"}:
+            turma = ""
         grupo = str(aluno.get("Grupo", "")).strip()
         sala = str(aluno.get("Sala", "")).strip()
         pct = freq_por_email.get(email_l)
@@ -389,7 +447,7 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
 
         linha: dict = {
             "Nome": nome,
-            "Turma": turma if turma != "—" else "",
+            "Turma": turma,
             "Grupo": grupo,
             "Sala": sala,
             "Pres.%": None if pct is None else round(float(pct), 3),

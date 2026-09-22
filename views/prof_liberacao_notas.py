@@ -1,9 +1,12 @@
-"""Liberação da nota final parcial para os alunos."""
+"""Liberação da nota final parcial para os alunos + painel de boletins."""
+
+from __future__ import annotations
 
 import streamlit as st
 
 from data.sheets import ler_aba
 from domain.liberacao_notas import notas_finais_liberadas, salvar_liberacao_notas
+from domain.notas import montar_painel_boletins_disciplina
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 
@@ -43,3 +46,49 @@ def render(usuario: dict):
         registrar_log(usuario["email"], usuario["nome"], f"Ocultou nota final — {disc_sel}")
         st.success("Nota final ocultada para os alunos.")
         st.rerun()
+
+    # Marcador visível imediatamente (antes do cálculo pesado) — confirma que a versão nova carregou.
+    st.divider()
+    st.subheader("Boletins da disciplina")
+    st.caption(
+        "Presença **realizada** (aulas + encontro presencial, quando houver). "
+        "Status: presença < 75% → reprovado por presença; "
+        "com presença ≥ 75%: nota < 40 reprovado · 40–69,9 recuperação · ≥ 70 aprovado."
+    )
+
+    with st.spinner("Calculando boletins e frequências…"):
+        try:
+            df_painel = montar_painel_boletins_disciplina(id_disc)
+        except Exception as exc:
+            st.error(f"Não foi possível montar o painel de boletins: {exc}")
+            return
+
+    if df_painel.empty:
+        st.warning("Nenhum aluno encontrado nesta disciplina.")
+        return
+
+    # Contagens rápidas de status
+    if "Status" in df_painel.columns:
+        contagem = df_painel["Status"].value_counts()
+        cols_m = st.columns(min(len(contagem), 4) or 1)
+        for i, (status, qtd) in enumerate(contagem.items()):
+            cols_m[i % len(cols_m)].metric(str(status), int(qtd))
+
+    st.dataframe(
+        df_painel,
+        width="stretch",
+        hide_index=True,
+        height=min(52 + 35 * len(df_painel), 720),
+        column_config={
+            "Presença (%)": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+
+    csv = df_painel.to_csv(index=False).encode("utf-8-sig")
+    st.download_button(
+        "Baixar boletins (CSV)",
+        data=csv,
+        file_name=f"boletins_{id_disc}.csv",
+        mime="text/csv",
+        width="stretch",
+    )

@@ -10,15 +10,25 @@ import streamlit as st
 
 from data.sheets import ler_aba
 from domain.liberacao_notas import notas_finais_liberadas, salvar_liberacao_notas
-from domain.notas import montar_painel_boletins_disciplina
+from domain.notas import bytes_excel_boletins, montar_painel_boletins_disciplina
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 
+_CACHE_VERSAO = "v2"  # sobe quando o formato do painel muda (números vs texto)
+
+
+def _chave_cache(id_disc: str, sufixo: str) -> str:
+    return f"lib_notas_boletim_{_CACHE_VERSAO}_{sufixo}_{id_disc}"
+
 
 def _opcoes_unicas(serie: pd.Series) -> list[str]:
     vals = sorted(
-        {str(v).strip() for v in serie.dropna().tolist() if str(v).strip()},
+        {
+            str(v).strip()
+            for v in serie.dropna().tolist()
+            if str(v).strip() and str(v).strip() not in {"—", "–"}
+        },
         key=chave_ordenacao_texto,
     )
     return vals
@@ -26,9 +36,9 @@ def _opcoes_unicas(serie: pd.Series) -> list[str]:
 
 def _carregar_ou_usar_cache(id_disc: str, *, forcar: bool) -> tuple[pd.DataFrame, list[str], str]:
     """Retorna (df, legendas, horario_br). Calcula só na 1ª abertura ou se forçar."""
-    chave_df = f"lib_notas_boletim_df_{id_disc}"
-    chave_leg = f"lib_notas_boletim_leg_{id_disc}"
-    chave_em = f"lib_notas_boletim_em_{id_disc}"
+    chave_df = _chave_cache(id_disc, "df")
+    chave_leg = _chave_cache(id_disc, "leg")
+    chave_em = _chave_cache(id_disc, "em")
 
     if forcar or chave_df not in st.session_state:
         df = montar_painel_boletins_disciplina(id_disc)
@@ -100,7 +110,7 @@ def render(usuario: dict):
         help="Recalcula boletins e frequências desta disciplina (pode demorar).",
     )
 
-    precisa_calcular = forcar or f"lib_notas_boletim_df_{id_disc}" not in st.session_state
+    precisa_calcular = forcar or _chave_cache(id_disc, "df") not in st.session_state
     try:
         if precisa_calcular:
             with st.spinner("Calculando boletins e frequências…"):
@@ -118,6 +128,10 @@ def render(usuario: dict):
         return
 
     base = df_painel.copy()
+    # Exibição: sala/turma vazias aparecem como — sem poluir a exportação.
+    for col_txt in ("Turma", "Sala"):
+        if col_txt in base.columns:
+            base[col_txt] = base[col_txt].replace({"": "—", None: "—"})
     turmas = _opcoes_unicas(base["Turma"]) if "Turma" in base.columns else []
     salas = _opcoes_unicas(base["Sala"]) if "Sala" in base.columns else []
     grupos = (
@@ -171,14 +185,14 @@ def render(usuario: dict):
         "Turma": st.column_config.TextColumn("Turma", width="small"),
         "Sala": st.column_config.TextColumn("Sala", width="small"),
         "Grupo": st.column_config.TextColumn("Grupo", width="small"),
-        "Final": st.column_config.TextColumn("Final", width="small"),
+        "Final": st.column_config.NumberColumn("Final", format="%.1f", width="small"),
         "Status": st.column_config.TextColumn("Status", width="medium"),
     }
     for col in mostrar.columns:
         if col in config:
             continue
-        # Notas abreviadas (C1 Ori, EF Tot, …)
-        config[col] = st.column_config.TextColumn(col, width="small")
+        # Notas abreviadas (C1 Ori, EF Tot, …) — na tela 1 casa; no Excel até 3.
+        config[col] = st.column_config.NumberColumn(col, format="%.1f", width="small")
 
     st.dataframe(
         mostrar,
@@ -188,13 +202,15 @@ def render(usuario: dict):
         column_config=config,
     )
 
-    csv_df = vista.copy()
-    csv = csv_df.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "Baixar boletins filtrados (CSV)",
-        data=csv,
-        file_name=f"boletins_{id_disc}.csv",
-        mime="text/csv",
+        "Baixar boletins filtrados (Excel)",
+        data=bytes_excel_boletins(vista),
+        file_name=f"boletins_{id_disc}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         width="stretch",
-        key=f"lib_notas_csv_{id_disc}",
+        key=f"lib_notas_xlsx_{id_disc}",
+        help=(
+            "Arquivo .xlsx limpo: colunas já separadas, notas como número "
+            "(até 3 casas), células vazias onde não há nota."
+        ),
     )

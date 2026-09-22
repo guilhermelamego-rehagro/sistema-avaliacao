@@ -239,9 +239,73 @@ def status_academico(
 
 
 def _fmt_nota_painel(valor: float | None) -> str:
-    if valor is None or (isinstance(valor, float) and pd.isna(valor)):
+    """Formato curto só para exibição; preferir número no DataFrame do painel."""
+    num = _nota_numerica(valor)
+    if num is None:
         return "—"
-    return f"{float(valor):.1f}"
+    return f"{num:.1f}"
+
+
+def _nota_numerica(valor) -> float | None:
+    """Converte nota para float; None/vazio/— → None (célula vazia na exportação)."""
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        txt = valor.strip()
+        if not txt or txt in {"—", "–", "-", "nan", "None"}:
+            return None
+        txt = txt.replace(",", ".")
+        try:
+            return float(txt)
+        except ValueError:
+            return None
+    try:
+        if pd.isna(valor):
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _arredondar_exportacao(valor, casas: int = 3) -> float | None:
+    num = _nota_numerica(valor)
+    if num is None:
+        return None
+    return round(float(num), casas)
+
+
+def preparar_exportacao_boletins(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Planilha limpa para Excel: textos sem travessão, notas como número
+    com até 3 casas decimais, ausências como célula vazia.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    texto = {"Nome", "Turma", "Grupo", "Sala", "Status"}
+    for col in out.columns:
+        if col in texto:
+            out[col] = (
+                out[col]
+                .map(lambda v: "" if v is None or str(v).strip() in {"", "—", "–", "nan", "None"} else str(v).strip())
+            )
+            continue
+        out[col] = out[col].map(lambda v: _arredondar_exportacao(v, 3))
+    return out
+
+
+def bytes_excel_boletins(df: pd.DataFrame) -> bytes:
+    """Gera .xlsx sem formatação especial (números reais, colunas já separadas)."""
+    import io
+
+    prep = preparar_exportacao_boletins(df)
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        prep.to_excel(writer, index=False, sheet_name="Boletins", na_rep="")
+    return buf.getvalue()
 
 
 def _sigla_componente(nome: str) -> str:
@@ -325,10 +389,10 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
 
         linha: dict = {
             "Nome": nome,
-            "Turma": turma,
+            "Turma": turma if turma != "—" else "",
             "Grupo": grupo,
-            "Sala": sala or "—",
-            "Pres.%": None if pct is None else round(pct, 1),
+            "Sala": sala,
+            "Pres.%": None if pct is None else round(float(pct), 3),
         }
 
         for _, comp in boletim.iterrows():
@@ -348,16 +412,16 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
                         col = _coluna_unica(f"{sigla} {sufixo}", usados)
                         mapa_cols[chave] = col
                         legendas.append(f"{col} = {nome_comp} · {rotulo_longo}")
-                    linha[mapa_cols[chave]] = _fmt_nota_painel(comp.get(campo))
+                    linha[mapa_cols[chave]] = _nota_numerica(comp.get(campo))
             else:
                 chave = (nome_comp, "")
                 if chave not in mapa_cols:
                     col = _coluna_unica(sigla, usados)
                     mapa_cols[chave] = col
                     legendas.append(f"{col} = {nome_comp}")
-                linha[mapa_cols[chave]] = _fmt_nota_painel(comp.get("Nota (0-100)"))
+                linha[mapa_cols[chave]] = _nota_numerica(comp.get("Nota (0-100)"))
 
-        linha["Final"] = _fmt_nota_painel(nota_final)
+        linha["Final"] = _nota_numerica(nota_final)
         linha["Status"] = status
         linhas.append(linha)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from config import PESO_ORIENTADOR, PESO_PARES
+from data.sheets import ler_aba
 from domain.avaliacoes import formatar_nota_entrega, obter_media_avaliacao_grupo_aluno, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina

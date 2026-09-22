@@ -357,7 +357,11 @@ def obter_media_avaliacao_grupo(
     sala: str = "",
     id_disciplina: str | None = None,
 ) -> dict | None:
-    """Nota oficial do grupo: override da conferência, senão média por professor."""
+    """Nota oficial do grupo: override da conferência, senão média por professor.
+
+    A busca é só por ciclo + grupo. ``sala`` é ignorada no cálculo (a sala é
+    só agrupamento operacional dos grupos).
+    """
     try:
         df = ler_aba("Avaliacao_Grupo")
     except Exception:
@@ -365,7 +369,8 @@ def obter_media_avaliacao_grupo(
     if df.empty:
         return None
 
-    filtro = filtrar_avaliacoes_grupo(df, id_disciplina, id_ciclo, grupo, sala or None)
+    _ = sala  # mantido na assinatura por compatibilidade; não filtra nota
+    filtro = filtrar_avaliacoes_grupo(df, id_disciplina, id_ciclo, grupo, sala=None)
     if filtro.empty:
         return None
 
@@ -428,10 +433,11 @@ def obter_media_avaliacao_grupo_aluno(
 
     Libera se houver conferência do coordenador, ou 2+ avaliações da banca,
     ou o ciclo já estiver inativo (fora da janela Data início/Data fim das pares).
+    A sala não entra no cálculo da nota.
     """
     from domain.ciclos import ciclo_inativo
 
-    oficial = obter_media_avaliacao_grupo(id_ciclo, grupo, sala, id_disciplina)
+    oficial = obter_media_avaliacao_grupo(id_ciclo, grupo, sala="", id_disciplina=id_disciplina)
     if not oficial:
         return None
     if oficial.get("origem") == "conferencia":

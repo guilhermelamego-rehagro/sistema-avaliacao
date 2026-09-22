@@ -15,7 +15,7 @@ from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 
-_CACHE_VERSAO = "v3"  # sobe quando o formato do painel muda (turma via Base_Alunos)
+_CACHE_VERSAO = "v4"  # grupo do ciclo via pares; nota de grupo sem filtro de sala
 
 
 def _chave_cache(id_disc: str, sufixo: str) -> str:

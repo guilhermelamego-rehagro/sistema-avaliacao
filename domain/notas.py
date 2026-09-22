@@ -61,12 +61,80 @@ def _nota_pares_ciclo(email: str, id_ciclo: str) -> float | None:
     return nota
 
 
-def _nota_grupo_ciclo(grupo: str, id_ciclo: str, sala: str = "") -> float | None:
-    """Só libera a nota do grupo ao aluno com o mesmo critério da Avaliação do grupo."""
-    aval = obter_media_avaliacao_grupo_aluno(id_ciclo, grupo, sala)
+def _nota_grupo_ciclo(grupo: str, id_ciclo: str, id_disciplina: str | None = None) -> float | None:
+    """Nota do grupo no ciclo (busca só por grupo + ciclo; sala não entra no cálculo)."""
+    grupo_t = str(grupo or "").strip()
+    if not grupo_t:
+        return None
+    aval = obter_media_avaliacao_grupo_aluno(
+        id_ciclo, grupo_t, sala="", id_disciplina=id_disciplina
+    )
     if not aval:
         return None
     return float(aval["nota_total"])
+
+
+def resolver_grupo_aluno_ciclo(
+    email: str,
+    id_ciclo: str,
+    grupo_fallback: str = "",
+) -> str:
+    """
+    Grupo do aluno naquele ciclo para nota de grupo no boletim.
+
+    Ordem:
+    1. Grupo em que o aluno enviou a avaliação de pares (como avaliador);
+    2. Grupo com mais avaliações recebidas naquele ciclo;
+    3. Fallback (ex.: Entrância atual).
+    """
+    email_l = str(email or "").strip().lower()
+    id_c = str(id_ciclo or "").strip()
+    fallback = str(grupo_fallback or "").strip()
+    if not email_l or not id_c:
+        return fallback
+
+    try:
+        df = carregar_avaliacoes_pares()
+    except Exception:
+        return fallback
+    if df is None or df.empty or "ID_Ciclo" not in df.columns:
+        return fallback
+
+    df_c = df[df["ID_Ciclo"].astype(str).str.strip() == id_c].copy()
+    if df_c.empty or "Grupo" not in df_c.columns:
+        return fallback
+
+    def _mais_frequente(bloco: pd.DataFrame) -> str:
+        if bloco.empty:
+            return ""
+        grupos = (
+            bloco["Grupo"]
+            .astype(str)
+            .str.strip()
+            .replace({"nan": "", "None": "", "—": "", "–": ""})
+        )
+        grupos = grupos[grupos.ne("")]
+        if grupos.empty:
+            return ""
+        return str(grupos.value_counts().index[0])
+
+    if "Email_Avaliador" in df_c.columns:
+        enviadas = df_c[
+            df_c["Email_Avaliador"].astype(str).str.lower().str.strip() == email_l
+        ]
+        escolhido = _mais_frequente(enviadas)
+        if escolhido:
+            return escolhido
+
+    if "Email_Avaliado" in df_c.columns:
+        recebidas = df_c[
+            df_c["Email_Avaliado"].astype(str).str.lower().str.strip() == email_l
+        ]
+        escolhido = _mais_frequente(recebidas)
+        if escolhido:
+            return escolhido
+
+    return fallback
 
 
 def _montar_detalhe_ciclo(
@@ -167,10 +235,13 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
         nota_par: float | None = None
 
         if tipo in ("Ciclo", "Entrega_Final") and id_ciclo:
+            grupo_ciclo = resolver_grupo_aluno_ciclo(email, id_ciclo, grupo_fallback=grupo)
             nota_ori = obter_nota_orientador(id_ciclo, email)
-            nota_grp = _nota_grupo_ciclo(grupo, id_ciclo, sala)
+            nota_grp = _nota_grupo_ciclo(grupo_ciclo, id_ciclo, id_disciplina)
             nota_par = _resolver_nota_pares_ciclo(email, id_ciclo, nota_ori, nota_grp)
             detalhe = _montar_detalhe_ciclo(nota_grp, nota_par, nota_ori)
+            if grupo_ciclo and grupo_ciclo != str(grupo or "").strip():
+                detalhe += f" · grupo do ciclo: {grupo_ciclo}"
             if origem_ciclo:
                 detalhe += f" · iguais a {origem_ciclo}"
 

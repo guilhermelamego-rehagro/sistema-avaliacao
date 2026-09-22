@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from config import PESO_ORIENTADOR, PESO_PARES
@@ -242,10 +244,39 @@ def _fmt_nota_painel(valor: float | None) -> str:
     return f"{float(valor):.1f}"
 
 
+def _sigla_componente(nome: str) -> str:
+    """Abrevia o nome do componente para cabeçalhos curtos no painel."""
+    n = str(nome or "").strip()
+    m = re.match(r"(?i)^\s*ciclo\s*(\d+)", n)
+    if m:
+        return f"C{m.group(1)}"
+    if re.search(r"(?i)entrega", n):
+        return "EF"
+    if re.search(r"(?i)reuni[aã]o|daily", n):
+        return "Daily"
+    if re.search(r"(?i)atividad", n):
+        return "Ativ"
+    limpo = re.sub(r"[^A-Za-z0-9]+", "", n)
+    return limpo[:8] or "Comp"
+
+
+def _coluna_unica(base: str, usados: set[str]) -> str:
+    if base not in usados:
+        usados.add(base)
+        return base
+    i = 2
+    while f"{base}{i}" in usados:
+        i += 1
+    out = f"{base}{i}"
+    usados.add(out)
+    return out
+
+
 def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
     """
     Monta tabela de boletins da disciplina para a tela de liberação de notas.
     Inclui presença realizada (com encontro presencial na conta) e status acadêmico.
+    Cabeçalhos de componentes usam siglas curtas (ex.: C1 Ori, C1 Par, EF Tot).
     """
     from domain.presenca import carregar_base_presenca, compilar_grid_frequencia
     from utils.disciplina import normalizar_id
@@ -273,6 +304,11 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
             em = str(fr.get("Email_Cru", "")).strip().lower()
             freq_por_email[em] = float(fr.get("% Realizado", 0))
 
+    # Mapa estável de colunas a partir do 1º aluno (mesma estrutura de componentes).
+    usados: set[str] = set()
+    mapa_cols: dict[tuple[str, str], str] = {}
+    legendas: list[str] = []
+
     linhas: list[dict] = []
     for _, aluno in alunos.iterrows():
         email = str(aluno["Email_Pessoal"]).strip()
@@ -292,25 +328,42 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
             "Turma": turma,
             "Grupo": grupo,
             "Sala": sala or "—",
-            "Presença (%)": None if pct is None else round(pct, 1),
+            "Pres.%": None if pct is None else round(pct, 1),
         }
 
         for _, comp in boletim.iterrows():
             nome_comp = str(comp["Componente"]).strip()
             tipo = str(comp.get("Tipo", "")).strip()
+            sigla = _sigla_componente(nome_comp)
             if tipo in ("Ciclo", "Entrega_Final"):
-                linha[f"{nome_comp} · Orientador(a)"] = _fmt_nota_painel(comp.get("Nota_Orientador"))
-                linha[f"{nome_comp} · Pares"] = _fmt_nota_painel(comp.get("Nota_Pares"))
-                linha[f"{nome_comp} · Grupo"] = _fmt_nota_painel(comp.get("Nota_Grupo"))
-                linha[f"{nome_comp} · Total"] = _fmt_nota_painel(comp.get("Nota (0-100)"))
+                papeis = (
+                    ("Ori", "Nota_Orientador", "Orientador(a)"),
+                    ("Par", "Nota_Pares", "Pares"),
+                    ("Grp", "Nota_Grupo", "Grupo"),
+                    ("Tot", "Nota (0-100)", "Total"),
+                )
+                for sufixo, campo, rotulo_longo in papeis:
+                    chave = (nome_comp, sufixo)
+                    if chave not in mapa_cols:
+                        col = _coluna_unica(f"{sigla} {sufixo}", usados)
+                        mapa_cols[chave] = col
+                        legendas.append(f"{col} = {nome_comp} · {rotulo_longo}")
+                    linha[mapa_cols[chave]] = _fmt_nota_painel(comp.get(campo))
             else:
-                linha[nome_comp] = _fmt_nota_painel(comp.get("Nota (0-100)"))
+                chave = (nome_comp, "")
+                if chave not in mapa_cols:
+                    col = _coluna_unica(sigla, usados)
+                    mapa_cols[chave] = col
+                    legendas.append(f"{col} = {nome_comp}")
+                linha[mapa_cols[chave]] = _fmt_nota_painel(comp.get("Nota (0-100)"))
 
-        linha["Nota final"] = _fmt_nota_painel(nota_final)
+        linha["Final"] = _fmt_nota_painel(nota_final)
         linha["Status"] = status
         linhas.append(linha)
 
     df = pd.DataFrame(linhas)
     if df.empty:
         return df
+    # Legenda das siglas fica no attrs (a UI mostra se houver).
+    df.attrs["legendas_colunas"] = legendas
     return df.sort_values(["Turma", "Sala", "Grupo", "Nome"], kind="stable").reset_index(drop=True)

@@ -90,6 +90,7 @@ def _render_gerar_ranking(usuario: dict, id_disc: str):
                 nome_ciclo,
                 usuario.get("email", ""),
                 usuario.get("nome", ""),
+                ranking,
             )
             registrar_log(
                 usuario.get("email", ""),

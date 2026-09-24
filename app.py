@@ -69,8 +69,6 @@ from navigation import (
     ROTA_ORDEM_APRESENTACAO,
     ROTA_LIBERAR_NOTAS,
     ROTA_DASHBOARD_CURSO,
-    ROTA_INDICACAO_GRUPO,
-    ROTA_INDICACAO_GRUPO_ALUNO,
     ROTA_MINHAS_NOTAS,
     ROTA_AVALIACAO_GRUPO_ALUNO,
     ROTA_MODERACAO,
@@ -78,14 +76,27 @@ from navigation import (
     ROTA_PARES_ACOMP,
     ROTA_PARES_AVALIAR,
     ROTA_RESULTADOS_PARES,
-    pode_gerenciar_indicacao_grupo,
     pode_gerenciar_liberacao_notas,
     renderizar_sidebar,
     rota_padrao,
 )
-from views import aluno_avaliacao_grupo, aluno_indicacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
+
+# Nomes novos da indicação: import separados para o app não cair se o
+# deploy do Cloud ainda estiver com navigation antigo no meio do reboot.
+try:
+    from navigation import (  # type: ignore
+        ROTA_INDICACAO_GRUPO,
+        ROTA_INDICACAO_GRUPO_ALUNO,
+        pode_gerenciar_indicacao_grupo,
+    )
+except ImportError:
+    ROTA_INDICACAO_GRUPO = "indicacao_grupo"
+    ROTA_INDICACAO_GRUPO_ALUNO = "indicacao_grupo_aluno"
+    pode_gerenciar_indicacao_grupo = pode_gerenciar_liberacao_notas
+
+from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_indicacao_grupo, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
+from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 from utils.ordenacao import ordenar_grupos_lista
 
@@ -1367,6 +1378,8 @@ else:
         aluno_avaliacao_grupo.render(aluno)
 
     elif menu == ROTA_INDICACAO_GRUPO_ALUNO and perfil == "Aluno":
+        from views import aluno_indicacao_grupo
+
         aluno_indicacao_grupo.render(aluno)
 
     # =========================================================
@@ -1452,6 +1465,8 @@ else:
         prof_liberacao_notas.render(aluno)
 
     elif menu == ROTA_INDICACAO_GRUPO and perfil == "Professor" and pode_gerenciar_indicacao_grupo(aluno):
+        from views import prof_indicacao_grupo
+
         prof_indicacao_grupo.render(aluno)
 
     # =========================================================

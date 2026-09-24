@@ -242,33 +242,103 @@ def calcular_ranking_ciclo(id_disciplina: str, id_ciclo: str) -> pd.DataFrame:
     posicoes: list[int] = [0] * len(df)
     vencedores: list[str] = ["Não"] * len(df)
 
-    for grupo, idx in df.groupby("Grupo", sort=False).groups.items():
+    # Ranking por sala+grupo; empates nos 3 critérios compartilham a mesma posição.
+    chaves_grupo = ["Sala", "Grupo"] if "Sala" in df.columns else ["Grupo"]
+    for _, idx in df.groupby(chaves_grupo, sort=False, dropna=False).groups.items():
         bloco_idx = list(idx)
         bloco = df.loc[bloco_idx].sort_values(
             by=["_nota", "_dailies", "_aulas", "Nome_Aluno"],
             ascending=[False, False, False, True],
             kind="mergesort",
         )
-        for pos, i in enumerate(bloco.index, start=1):
-            posicoes[df.index.get_loc(i)] = pos
+        prev_key = None
+        pos_atual = 0
+        for ordem, i in enumerate(bloco.index):
+            key = (
+                float(bloco.at[i, "_nota"]),
+                float(bloco.at[i, "_dailies"]),
+                float(bloco.at[i, "_aulas"]),
+            )
+            if prev_key is None or key != prev_key:
+                pos_atual = ordem + 1  # ranking de competição: 1,1,3…
+                prev_key = key
+            posicoes[df.index.get_loc(i)] = pos_atual
 
-        # Vencedor único: 1º lugar sem empate nos 3 critérios com outro do grupo.
+        # Vencedor só se houver um único 1º (sem empate nos 3 critérios).
         primeiro = bloco.iloc[0]
-        empate = False
-        if len(bloco) > 1:
-            segundo = bloco.iloc[1]
+        top_key = (
+            float(primeiro["_nota"]),
+            float(primeiro["_dailies"]),
+            float(primeiro["_aulas"]),
+        )
+        empatados_topo = [
+            i
+            for i in bloco.index
             if (
-                float(primeiro["_nota"]) == float(segundo["_nota"])
-                and float(primeiro["_dailies"]) == float(segundo["_dailies"])
-                and float(primeiro["_aulas"]) == float(segundo["_aulas"])
-            ):
-                empate = True
-        if not empate and float(primeiro["_nota"]) >= 0:
-            vencedores[df.index.get_loc(bloco.index[0])] = "Sim"
+                float(bloco.at[i, "_nota"]),
+                float(bloco.at[i, "_dailies"]),
+                float(bloco.at[i, "_aulas"]),
+            )
+            == top_key
+        ]
+        if len(empatados_topo) == 1 and float(primeiro["_nota"]) >= 0:
+            vencedores[df.index.get_loc(empatados_topo[0])] = "Sim"
 
     df["Posicao_Grupo"] = posicoes
     df["Vencedor"] = vencedores
     return df.drop(columns=["_nota", "_dailies", "_aulas"]).reset_index(drop=True)
+
+
+def candidatos_desempate_grupo(bloco: pd.DataFrame) -> pd.DataFrame:
+    """
+    Alunos empatados no topo do grupo em nota, % dailies e % aulas
+    (únicos elegíveis ao desempate da coordenação).
+    """
+    if bloco is None or bloco.empty:
+        return pd.DataFrame()
+    b = bloco.copy()
+    b["_nota"] = pd.to_numeric(b.get("Nota_Ciclo"), errors="coerce").fillna(-1)
+    b["_dailies"] = pd.to_numeric(b.get("Pct_Dailies"), errors="coerce").fillna(-1)
+    b["_aulas"] = pd.to_numeric(b.get("Pct_Aulas"), errors="coerce").fillna(-1)
+    top_nota = float(b["_nota"].max())
+    b = b[b["_nota"] == top_nota]
+    top_d = float(b["_dailies"].max())
+    b = b[b["_dailies"] == top_d]
+    top_a = float(b["_aulas"].max())
+    b = b[b["_aulas"] == top_a]
+    return b.drop(columns=["_nota", "_dailies", "_aulas"], errors="ignore").reset_index(drop=True)
+
+
+def recalcular_posicoes_exibicao(rank: pd.DataFrame) -> pd.DataFrame:
+    """Recalcula Posicao_Grupo na exibição (empates repetem o número)."""
+    if rank is None or rank.empty:
+        return rank
+    out = rank.copy()
+    out["_nota"] = pd.to_numeric(out.get("Nota_Ciclo"), errors="coerce").fillna(-1)
+    out["_dailies"] = pd.to_numeric(out.get("Pct_Dailies"), errors="coerce").fillna(-1)
+    out["_aulas"] = pd.to_numeric(out.get("Pct_Aulas"), errors="coerce").fillna(-1)
+    posicoes = pd.Series(0, index=out.index, dtype=int)
+    chaves = ["Sala", "Grupo"] if "Sala" in out.columns else ["Grupo"]
+    for _, idx in out.groupby(chaves, sort=False, dropna=False).groups.items():
+        bloco = out.loc[list(idx)].sort_values(
+            by=["_nota", "_dailies", "_aulas", "Nome_Aluno"],
+            ascending=[False, False, False, True],
+            kind="mergesort",
+        )
+        prev_key = None
+        pos_atual = 0
+        for ordem, i in enumerate(bloco.index):
+            key = (
+                float(bloco.at[i, "_nota"]),
+                float(bloco.at[i, "_dailies"]),
+                float(bloco.at[i, "_aulas"]),
+            )
+            if prev_key is None or key != prev_key:
+                pos_atual = ordem + 1
+                prev_key = key
+            posicoes.at[i] = pos_atual
+    out["Posicao_Grupo"] = posicoes
+    return out.drop(columns=["_nota", "_dailies", "_aulas"])
 
 
 def criar_janela_rascunho(
@@ -347,6 +417,13 @@ def marcar_desempate_coord(id_janela: str, email_vencedor: str) -> str | None:
         return "Aluno não está no ranking desta janela."
     grupo = str(alvo.iloc[0].get("Grupo", "")).strip()
     sala = str(alvo.iloc[0].get("Sala", "")).strip()
+    bloco = df[
+        (df["Grupo"].astype(str).str.strip() == grupo)
+        & (df["Sala"].astype(str).str.strip() == sala)
+    ]
+    elegiveis = candidatos_desempate_grupo(bloco)
+    if elegiveis.empty or email_l not in set(elegiveis["Email_Aluno"].map(_email_limpo)):
+        return "Só é possível desempatar entre alunos empatados em nota, % dailies e % aulas."
 
     full = carregar_ranking()
     mask_janela = full["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()

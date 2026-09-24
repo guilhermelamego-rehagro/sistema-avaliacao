@@ -16,12 +16,14 @@ from domain.indicacao_grupo import (
     abrir_janela,
     atualizar_excluidos,
     calcular_ranking_ciclo,
+    candidatos_desempate_grupo,
     carregar_indicacoes,
     carregar_janelas,
     carregar_ranking,
     criar_janela_rascunho,
     fechar_janela,
     marcar_desempate_coord,
+    recalcular_posicoes_exibicao,
 )
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa, normalizar_id
 from utils.logs import registrar_log
@@ -134,6 +136,8 @@ def _render_ranking(id_disc: str):
         st.warning("Ranking vazio nesta janela.")
         return
 
+    rank = recalcular_posicoes_exibicao(rank)
+
     cols = [
         c
         for c in (
@@ -154,26 +158,53 @@ def _render_ranking(id_disc: str):
     mostrar["_sala"] = mostrar["Sala"].map(lambda x: chave_ordenacao_texto(str(x)))
     mostrar["_grupo"] = mostrar["Grupo"].map(lambda x: chave_ordenacao_texto(str(x)))
     mostrar["_pos"] = pd.to_numeric(mostrar["Posicao_Grupo"], errors="coerce").fillna(999)
-    mostrar = mostrar.sort_values(["_sala", "_grupo", "_pos"], kind="mergesort").drop(
-        columns=["_sala", "_grupo", "_pos"]
+    mostrar["_nome"] = mostrar["Nome_Aluno"].map(lambda x: chave_ordenacao_texto(str(x)))
+    mostrar = mostrar.sort_values(
+        ["_sala", "_grupo", "_pos", "_nome"], kind="mergesort"
+    ).drop(columns=["_sala", "_grupo", "_pos", "_nome"])
+    st.dataframe(
+        mostrar,
+        width="stretch",
+        hide_index=True,
+        column_config={
+            "Posicao_Grupo": st.column_config.NumberColumn("Posição", format="%d"),
+            "Nota_Ciclo": st.column_config.NumberColumn(format="%.3f"),
+            "Pct_Dailies": st.column_config.NumberColumn(format="%.3f"),
+            "Pct_Aulas": st.column_config.NumberColumn(format="%.3f"),
+        },
     )
-    st.dataframe(mostrar, width="stretch", hide_index=True)
+    st.caption(
+        "Posição: empates em nota + % dailies + % aulas repetem o mesmo número "
+        "(ex.: 1, 1, 3)."
+    )
 
-    # Empates: grupos sem vencedor
+    # Empates no 1º lugar (todos os critérios): só esses entram no desempate da coord.
     sem_v = []
     for (sala, grupo), bloco in rank.groupby(["Sala", "Grupo"], dropna=False):
         ven = bloco[bloco["Vencedor"].astype(str).str.strip().str.lower().isin({"sim", "s", "1", "true"})]
         if ven.empty:
-            sem_v.append((str(sala), str(grupo), bloco))
+            empatados = candidatos_desempate_grupo(bloco)
+            if len(empatados) > 1:
+                sem_v.append((str(sala), str(grupo), empatados))
 
     if sem_v:
-        st.warning(f"{len(sem_v)} grupo(s) empatado(s) — escolha o vencedor abaixo.")
-        for sala, grupo, bloco in sem_v:
+        st.warning(
+            f"{len(sem_v)} grupo(s) empatado(s) no 1º lugar — "
+            "escolha o vencedor apenas entre os empatados."
+        )
+        for sala, grupo, empatados in sem_v:
             opcoes = {
-                f"{r['Nome_Aluno']} ({r['Email_Aluno']}) — nota {r['Nota_Ciclo']}": str(r["Email_Aluno"])
-                for _, r in bloco.iterrows()
+                (
+                    f"{r['Nome_Aluno']} ({r['Email_Aluno']}) — "
+                    f"nota {r['Nota_Ciclo']} · dailies {r['Pct_Dailies']}% · "
+                    f"aulas {r['Pct_Aulas']}%"
+                ): str(r["Email_Aluno"])
+                for _, r in empatados.iterrows()
             }
             with st.expander(f"Desempate · Sala {sala} · Grupo {grupo}"):
+                st.caption(
+                    f"{len(opcoes)} aluno(s) empatados em nota, % dailies e % aulas."
+                )
                 escolha = st.selectbox(
                     "Vencedor definido pela coordenação:",
                     list(opcoes.keys()),

@@ -160,7 +160,7 @@ def _render_ranking(id_disc: str):
     st.dataframe(mostrar, width="stretch", hide_index=True)
 
     # Empates: grupos sem vencedor
-    sem_venc = []
+    sem_v = []
     for (sala, grupo), bloco in rank.groupby(["Sala", "Grupo"], dropna=False):
         ven = bloco[bloco["Vencedor"].astype(str).str.strip().str.lower().isin({"sim", "s", "1", "true"})]
         if ven.empty:

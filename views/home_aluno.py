@@ -3,9 +3,10 @@
 import streamlit as st
 
 from domain.ciclos import obter_disciplina_ativa
+from domain.indicacao_grupo import janelas_abertas_para_vencedor
 from domain.plataforma import link_plataforma_disciplina_ativa
 from domain.status_inicio_aluno import ResumoTarefa, status_avaliacao_curso, status_avaliacao_pares
-from navigation import ROTA_CURSO_AVALIAR, ROTA_PARES_AVALIAR, ir_para
+from navigation import ROTA_CURSO_AVALIAR, ROTA_INDICACAO_GRUPO_ALUNO, ROTA_PARES_AVALIAR, ir_para
 from views.prof_calendario import render as render_calendario
 
 
@@ -73,6 +74,26 @@ def render(usuario: dict):
     email = usuario["email"]
     _render_card(status_avaliacao_pares(email), ROTA_PARES_AVALIAR)
     _render_card(status_avaliacao_curso(email), ROTA_CURSO_AVALIAR)
+
+    try:
+        janelas_ind = janelas_abertas_para_vencedor(email)
+    except Exception:
+        janelas_ind = None
+    if janelas_ind is not None and not janelas_ind.empty:
+        with st.container(border=True):
+            st.caption("Pendente")
+            st.markdown("**Indicar colega para o grupo**")
+            st.info(
+                "Você ficou entre os melhores do ciclo e pode indicar um colega "
+                "da oferta para o próximo agrupamento."
+            )
+            if st.button(
+                "Ir para indicação",
+                key="home_btn_indicacao_grupo",
+                type="primary",
+                width="stretch",
+            ):
+                ir_para(ROTA_INDICACAO_GRUPO_ALUNO)
 
     st.caption(
         "Consulte frequência, dailies, comentários da banca e notas em "

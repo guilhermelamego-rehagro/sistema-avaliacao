@@ -69,6 +69,8 @@ from navigation import (
     ROTA_ORDEM_APRESENTACAO,
     ROTA_LIBERAR_NOTAS,
     ROTA_DASHBOARD_CURSO,
+    ROTA_INDICACAO_GRUPO,
+    ROTA_INDICACAO_GRUPO_ALUNO,
     ROTA_MINHAS_NOTAS,
     ROTA_AVALIACAO_GRUPO_ALUNO,
     ROTA_MODERACAO,
@@ -76,13 +78,14 @@ from navigation import (
     ROTA_PARES_ACOMP,
     ROTA_PARES_AVALIAR,
     ROTA_RESULTADOS_PARES,
+    pode_gerenciar_indicacao_grupo,
     pode_gerenciar_liberacao_notas,
     renderizar_sidebar,
     rota_padrao,
 )
-from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
+from views import aluno_avaliacao_grupo, aluno_indicacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
-from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
+from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_indicacao_grupo, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
 from utils.ordenacao import ordenar_grupos_lista
 
@@ -1363,6 +1366,9 @@ else:
     elif menu == ROTA_AVALIACAO_GRUPO_ALUNO and perfil == "Aluno":
         aluno_avaliacao_grupo.render(aluno)
 
+    elif menu == ROTA_INDICACAO_GRUPO_ALUNO and perfil == "Aluno":
+        aluno_indicacao_grupo.render(aluno)
+
     # =========================================================
     # MÓDULO PROFESSOR: COMPONENTES DE AVALIAÇÃO
     # =========================================================
@@ -1444,6 +1450,9 @@ else:
 
     elif menu == ROTA_LIBERAR_NOTAS and perfil == "Professor" and pode_gerenciar_liberacao_notas(aluno):
         prof_liberacao_notas.render(aluno)
+
+    elif menu == ROTA_INDICACAO_GRUPO and perfil == "Professor" and pode_gerenciar_indicacao_grupo(aluno):
+        prof_indicacao_grupo.render(aluno)
 
     # =========================================================
     # MÓDULO PROFESSOR: IMPORTAR CANVAS

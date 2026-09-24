@@ -22,6 +22,7 @@ ROTA_FREQ_DAILIES = "freq_dailies"
 ROTA_RESULTADOS_PARES = "resultados_pares"
 ROTA_AVALIACAO_GRUPO_ALUNO = "avaliacao_grupo_aluno"
 ROTA_MINHAS_NOTAS = "minhas_notas"
+ROTA_INDICACAO_GRUPO_ALUNO = "indicacao_grupo_aluno"
 
 # Professor orientador
 ROTA_PARES_ACOMP = "pares_acompanhamento"
@@ -36,6 +37,7 @@ ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
 ROTA_IMPORT_CANVAS = "import_canvas"
 ROTA_LIBERAR_NOTAS = "liberar_notas"
 ROTA_DASHBOARD_CURSO = "dashboard_curso"
+ROTA_INDICACAO_GRUPO = "indicacao_grupo"
 
 # Coordenador
 ROTA_COORD_CONFIG = "coord_config"
@@ -71,6 +73,8 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_ORDEM_APRESENTACAO,
         ROTA_COORD_CONFIG,
         ROTA_DASHBOARD_CURSO,
+        ROTA_INDICACAO_GRUPO,
+        ROTA_LIBERAR_NOTAS,
     }
 )
 
@@ -141,8 +145,17 @@ def pode_gerenciar_liberacao_notas(usuario: dict) -> bool:
     return False
 
 
+def pode_gerenciar_indicacao_grupo(usuario: dict) -> bool:
+    """Coord (modo coordenador) + orientadores — mesmo critério da liberação de notas."""
+    return pode_gerenciar_liberacao_notas(usuario)
+
+
 def _item_liberacao_notas() -> ItemMenu:
     return ItemMenu(ROTA_LIBERAR_NOTAS, "Liberação de notas finais")
+
+
+def _item_indicacao_grupo() -> ItemMenu:
+    return ItemMenu(ROTA_INDICACAO_GRUPO, "Indicação de grupos")
 
 
 def _secoes_aluno() -> list[SecaoMenu]:
@@ -163,6 +176,7 @@ def _secoes_aluno() -> list[SecaoMenu]:
                 ItemMenu(ROTA_RESULTADOS_PARES, "Resultados de pares"),
                 ItemMenu(ROTA_AVALIACAO_GRUPO_ALUNO, "Avaliação do grupo"),
                 ItemMenu(ROTA_MINHAS_NOTAS, "Minhas notas (boletim)"),
+                ItemMenu(ROTA_INDICACAO_GRUPO_ALUNO, "Indicar colega para o grupo"),
             ),
         ),
     ]
@@ -189,6 +203,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     )
     if professor_e_orientador(usuario):
         itens_avaliacoes.append(_item_liberacao_notas())
+        itens_avaliacoes.append(_item_indicacao_grupo())
 
     secoes: list[SecaoMenu] = [
         SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),)),
@@ -228,6 +243,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
             itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))
             itens_coord.append(ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"))
             itens_coord.append(_item_liberacao_notas())
+            itens_coord.append(_item_indicacao_grupo())
         secoes.insert(
             0,
             SecaoMenu("Coordenação", tuple(itens_coord)),

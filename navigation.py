@@ -35,6 +35,7 @@ ROTA_FREQ_CONTROLE = "freq_controle"
 ROTA_FREQ_PROGRAMACAO = "freq_programacao"
 ROTA_FREQ_DAILIES_PROF = "freq_dailies_prof"
 ROTA_IMPORT_CANVAS = "import_canvas"
+ROTA_NOTAS_ATIVIDADES = "notas_atividades"
 ROTA_LIBERAR_NOTAS = "liberar_notas"
 ROTA_DASHBOARD_CURSO = "dashboard_curso"
 ROTA_INDICACAO_GRUPO = "indicacao_grupo"
@@ -75,6 +76,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_DASHBOARD_CURSO,
         ROTA_INDICACAO_GRUPO,
         ROTA_LIBERAR_NOTAS,
+        ROTA_NOTAS_ATIVIDADES,
     }
 )
 
@@ -205,6 +207,10 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
         itens_avaliacoes.append(_item_liberacao_notas())
         itens_avaliacoes.append(_item_indicacao_grupo())
 
+    itens_integracoes = [ItemMenu(ROTA_IMPORT_CANVAS, "Importar Canvas")]
+    if pode_gerenciar_liberacao_notas(usuario):
+        itens_integracoes.append(ItemMenu(ROTA_NOTAS_ATIVIDADES, "Notas das atividades"))
+
     secoes: list[SecaoMenu] = [
         SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),)),
         SecaoMenu("Avaliações do ciclo", tuple(itens_avaliacoes)),
@@ -216,10 +222,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
                 ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
             ),
         ),
-        SecaoMenu(
-            "Integrações",
-            (ItemMenu(ROTA_IMPORT_CANVAS, "Importar Canvas"),),
-        ),
+        SecaoMenu("Integrações", tuple(itens_integracoes)),
     ]
     if modo_coordenador:
         itens_coord: list[ItemMenu] = [

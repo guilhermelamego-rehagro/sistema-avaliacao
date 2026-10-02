@@ -1,7 +1,9 @@
 """Tela do aluno: boletim com componentes e nota final."""
 
+import pandas as pd
 import streamlit as st
 
+from domain.atividades_notas import atividades_liberadas, nome_curto_atividade, notas_efetivas
 from domain.ciclos import obter_disciplina_ativa
 from domain.liberacao_notas import notas_finais_liberadas
 from domain.notas import calcular_boletim_aluno, nota_final_boletim
@@ -31,7 +33,9 @@ def render(usuario: dict):
     sala = str(vinculo.iloc[0].get("Sala", "")).strip()
     st.info(f"**Disciplina:** {nome_disc} | **Grupo:** {grupo} | **Sala:** {sala or '—'}")
 
-    df_boletim = calcular_boletim_aluno(usuario["email"], str(id_disc), grupo, sala)
+    df_boletim = calcular_boletim_aluno(
+        usuario["email"], str(id_disc), grupo, sala, somente_atividades_liberadas=True
+    )
     liberado = notas_finais_liberadas(str(id_disc))
 
     if liberado:
@@ -70,4 +74,31 @@ def render(usuario: dict):
             "Nota (0-100)": st.column_config.NumberColumn(format="%.1f"),
             "Contribuição": st.column_config.NumberColumn(format="%.2f"),
         },
+    )
+
+    _render_atividades_liberadas(usuario["email"], str(id_disc))
+
+
+def _render_atividades_liberadas(email: str, id_disc: str):
+    liberadas = atividades_liberadas(id_disc)
+    if not liberadas:
+        return
+    df = notas_efetivas(id_disc)
+    df = df[(df["Email_Aluno"] == email.strip().lower()) & df["ID_Atividade"].isin(liberadas)]
+    if df.empty:
+        return
+    st.subheader("Atividades individuais")
+    tabela = pd.DataFrame(
+        {
+            "Atividade": df["Atividade"].map(nome_curto_atividade),
+            "Prazo": df["Prazo"],
+            "Nota (0-100)": df["Nota"],
+        }
+    )
+    tabela["_prazo"] = pd.to_datetime(tabela["Prazo"], format="%d/%m/%Y", errors="coerce")
+    st.dataframe(
+        tabela.sort_values("_prazo").drop(columns="_prazo"),
+        width="stretch",
+        hide_index=True,
+        column_config={"Nota (0-100)": st.column_config.NumberColumn(format="%.1f")},
     )

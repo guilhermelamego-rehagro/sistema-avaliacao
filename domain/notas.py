@@ -8,6 +8,7 @@ import pandas as pd
 
 from config import PESO_ORIENTADOR, PESO_PARES
 from data.sheets import ler_aba
+from domain.atividades_notas import nota_atividades_aluno
 from domain.avaliacoes import formatar_nota_entrega, obter_media_avaliacao_grupo_aluno, obter_nota_orientador
 from domain.ciclos import ciclo_inativo
 from domain.componentes import carregar_componentes_disciplina
@@ -177,24 +178,10 @@ def _resolver_nota_pares_ciclo(
     return nota_pares
 
 
-def _nota_atividades(email: str, id_disciplina: str) -> tuple[float | None, str]:
-    try:
-        df = ler_aba("Atividades_Individuais")
-    except Exception:
-        return None, "Sem atividades importadas"
-
-    if df.empty:
-        return None, "Sem atividades importadas"
-
-    filtro = df[
-        (df["ID_Disciplina"].astype(str).str.strip() == str(id_disciplina).strip())
-        & (df["Email_Aluno"].astype(str).str.lower().str.strip() == email.lower().strip())
-    ]
-    if filtro.empty:
-        return None, "Sem notas de atividades"
-
-    media = pd.to_numeric(filtro["Nota"], errors="coerce").mean()
-    return round(float(media), 1), f"Média de {len(filtro)} atividade(s)"
+def _nota_atividades(
+    email: str, id_disciplina: str, somente_liberadas: bool = False
+) -> tuple[float | None, str]:
+    return nota_atividades_aluno(email, id_disciplina, somente_liberadas=somente_liberadas)
 
 
 def _nota_dailies(email: str, id_disciplina: str = "") -> tuple[float | None, str]:
@@ -217,7 +204,14 @@ def _nota_dailies(email: str, id_disciplina: str = "") -> tuple[float | None, st
     return round(pct, 1), f"{pres}/{len(vivido)} reuniões"
 
 
-def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str = "") -> pd.DataFrame:
+def calcular_boletim_aluno(
+    email: str,
+    id_disciplina: str,
+    grupo: str,
+    sala: str = "",
+    *,
+    somente_atividades_liberadas: bool = False,
+) -> pd.DataFrame:
     componentes = carregar_componentes_disciplina(id_disciplina)
     linhas = []
 
@@ -252,7 +246,7 @@ def calcular_boletim_aluno(email: str, id_disciplina: str, grupo: str, sala: str
             nota, detalhe = _nota_dailies(email, id_disciplina)
 
         elif tipo == "Atividade_Individual":
-            nota, detalhe = _nota_atividades(email, id_disciplina)
+            nota, detalhe = _nota_atividades(email, id_disciplina, somente_atividades_liberadas)
 
         contribuicao = (nota * peso / 100) if nota is not None else None
 

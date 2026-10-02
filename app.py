@@ -94,6 +94,11 @@ except ImportError:
     ROTA_INDICACAO_GRUPO_ALUNO = "indicacao_grupo_aluno"
     pode_gerenciar_indicacao_grupo = pode_gerenciar_liberacao_notas
 
+try:
+    from navigation import ROTA_NOTAS_ATIVIDADES  # type: ignore
+except ImportError:
+    ROTA_NOTAS_ATIVIDADES = "notas_atividades"
+
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
 from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
@@ -1474,3 +1479,8 @@ else:
     # =========================================================
     elif menu == ROTA_IMPORT_CANVAS and perfil == "Professor" and professor_e_orientador(aluno):
         prof_import_canvas.render(aluno)
+
+    elif menu == ROTA_NOTAS_ATIVIDADES and perfil == "Professor" and pode_gerenciar_liberacao_notas(aluno):
+        from views import prof_notas_atividades
+
+        prof_notas_atividades.render(aluno)

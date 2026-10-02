@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba
+from domain.atividades_notas import ACAO_IMPORTACAO, registrar_historico
 from domain.canvas_import import (
     DESCARTAR,
     alunos_app_sem_canvas,
@@ -220,12 +221,18 @@ def render(usuario: dict):
     st.subheader("4. Gravar")
     ids = {a.id for a in atividades}
     gravaveis = notas[notas["Situacao"] != "pendente"] if not notas.empty else notas
-    substituidas = contar_substituicoes(id_disc, ids)
+    substituidas, editadas = contar_substituicoes(id_disc, ids)
     nao_importados = int((cruzamento["Metodo"] == "").sum())
     st.markdown(
         f"Serão gravadas **{len(gravaveis)}** notas de **{gravaveis['Email_Aluno'].nunique() if not gravaveis.empty else 0}** alunos"
         + (f", substituindo **{substituidas}** já importadas destas atividades." if substituidas else ".")
     )
+    if editadas:
+        st.caption(
+            f"{editadas} nota(s) editada(s) por professores nestas atividades continuam valendo; "
+            "o valor novo do Canvas fica registrado ao lado em **Notas das atividades**."
+        )
+    st.caption("Notas novas entram **ocultas** para os alunos até a liberação em **Notas das atividades**.")
     if nao_importados:
         st.caption(f"{nao_importados} linha(s) do Canvas ficam de fora (sem aluno escolhido).")
 
@@ -250,5 +257,20 @@ def render(usuario: dict):
             usuario["email"],
             usuario["nome"],
             f"Importou {qtd} notas Canvas ({len(ids)} atividades) - {disc_sel}",
+        )
+        por_atividade = gravaveis.groupby("ID_Atividade")
+        registrar_historico(
+            [
+                {
+                    "ID_Disciplina": id_disc,
+                    "ID_Atividade": ida,
+                    "Atividade": grupo["Atividade"].iloc[0],
+                    "Acao": ACAO_IMPORTACAO,
+                    "Motivo": f"{len(grupo)} nota(s) gravada(s)",
+                }
+                for ida, grupo in por_atividade
+            ],
+            usuario["email"],
+            usuario["nome"],
         )
         st.success(f"{qtd} notas gravadas para **{disc_sel}**.")

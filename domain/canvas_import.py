@@ -13,6 +13,7 @@ import pandas as pd
 
 from config import ABAS_AVALIACAO
 from data.sheets import garantir_aba_avaliacao, ler_aba, salvar_aba
+from domain.atividades_notas import ORIGEM_EDICAO, id_atividade
 from utils.disciplina import normalizar_id
 
 ABA_ATIVIDADES = "Atividades_Individuais"
@@ -313,22 +314,28 @@ def montar_notas(
     return pd.DataFrame(linhas)
 
 
-def _id_atividade(texto) -> str:
-    m = _RE_ATIVIDADE.search(str(texto or "").strip())
-    return m.group(1) if m else ""
+def _mascara_atividades(df: pd.DataFrame, id_disciplina: str, ids_atividades: set[str]) -> pd.Series:
+    return (df["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disciplina)) & df["Atividade"].map(
+        id_atividade
+    ).isin(ids_atividades)
 
 
-def contar_substituicoes(id_disciplina: str, ids_atividades: set[str]) -> int:
+def _e_edicao(df: pd.DataFrame) -> pd.Series:
+    origem = df["Origem"] if "Origem" in df.columns else pd.Series("", index=df.index)
+    return origem.astype(str).str.strip() == ORIGEM_EDICAO
+
+
+def contar_substituicoes(id_disciplina: str, ids_atividades: set[str]) -> tuple[int, int]:
+    """(notas do Canvas que serão substituídas, edições docentes preservadas)."""
     try:
         df = ler_aba(ABA_ATIVIDADES)
     except Exception:
-        return 0
+        return 0, 0
     if df.empty:
-        return 0
-    mask = (df["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disciplina)) & df[
-        "Atividade"
-    ].map(_id_atividade).isin(ids_atividades)
-    return int(mask.sum())
+        return 0, 0
+    mask = _mascara_atividades(df, id_disciplina, ids_atividades)
+    edicao = _e_edicao(df)
+    return int((mask & ~edicao).sum()), int((mask & edicao).sum())
 
 
 def gravar_importacao(
@@ -339,8 +346,8 @@ def gravar_importacao(
     email_responsavel: str,
 ) -> int:
     """
-    Substitui as notas destas atividades na disciplina e salva os vínculos
-    Canvas → e-mail institucional para as próximas importações.
+    Substitui as notas do Canvas destas atividades na disciplina (edições
+    docentes ficam) e salva os vínculos Canvas → e-mail institucional.
     """
     colunas = ABAS_AVALIACAO[ABA_ATIVIDADES]
     id_d = normalizar_id(id_disciplina)
@@ -349,11 +356,7 @@ def gravar_importacao(
     garantir_aba_avaliacao(ABA_ATIVIDADES)
     atual = ler_aba(ABA_ATIVIDADES)
     if not atual.empty:
-        manter = ~(
-            (atual["ID_Disciplina"].map(normalizar_id) == id_d)
-            & atual["Atividade"].map(_id_atividade).isin(ids_atividades)
-        )
-        atual = atual[manter]
+        atual = atual[~(_mascara_atividades(atual, id_d, ids_atividades) & ~_e_edicao(atual))]
 
     gravar = notas[notas["Situacao"].ne("pendente")]
     novas = pd.DataFrame(

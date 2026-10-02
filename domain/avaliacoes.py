@@ -796,26 +796,3 @@ def parse_nota_orientador(valor) -> float | None:
     if 0 <= nota <= 10:
         return nota
     return None
-
-
-def importar_atividades_canvas(df_import: pd.DataFrame, id_disciplina: str) -> int:
-    ws = planilha.worksheet("Atividades_Individuais")
-    agora = _agora()
-    linhas = []
-    for _, row in df_import.iterrows():
-        linhas.append(
-            [
-                id_disciplina,
-                str(row.get("Semana", "")),
-                str(row.get("Atividade", "")),
-                str(row.get("Email_Aluno", "")).strip().lower(),
-                str(row.get("Nome_Aluno", "")),
-                float(row.get("Nota", 0)),
-                "Canvas",
-                agora,
-            ]
-        )
-    if linhas:
-        ws.append_rows(linhas)
-        limpar_cache_planilhas()
-    return len(linhas)

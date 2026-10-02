@@ -39,6 +39,14 @@ ABAS_AVALIACAO = {
         "Origem",
         "Data_Importacao",
     ],
+    "Canvas_Alunos": [
+        "ID_Canvas",
+        "Email_Aluno",
+        "Nome_Canvas",
+        "Origem",
+        "Atualizado_Em",
+        "Email_Responsavel",
+    ],
     "Config_Componentes": [
         "ID_Componente",
         "ID_Disciplina",

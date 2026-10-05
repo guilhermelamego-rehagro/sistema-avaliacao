@@ -88,6 +88,28 @@ def overlaps_janelas_pares(df_ciclos: pd.DataFrame) -> list[str]:
     return avisos
 
 
+def avisos_ciclos_bloqueados(df_ciclos: pd.DataFrame, hoje: pd.Timestamp | None = None) -> list[str]:
+    """Ciclos com status inativo cuja janela de pares ainda não terminou (não vão abrir)."""
+    if df_ciclos is None or df_ciclos.empty:
+        return []
+    hoje = hoje or hoje_normalizado()
+    df = preparar_ciclos(df_ciclos)
+    if not {"Status", "Data início", "Data fim"}.issubset(df.columns):
+        return []
+    inativo = df["Status"].astype(str).str.strip().str.lower() == "inativo"
+    pendente = df["Data início"].notna() & df["Data fim"].notna() & (df["Data fim"] >= hoje)
+    avisos = []
+    for _, row in df[inativo & pendente].iterrows():
+        nome = str(row.get("Nome_Ciclo", "")).strip() or str(row.get("ID_Ciclo", "")).strip()
+        disc = str(row.get("ID_Disciplina", "")).strip()
+        momento = "já começou" if row["Data início"] <= hoje else f"abre em {row['Data início']:%d/%m}"
+        avisos.append(
+            f"**{nome}** ({disc}) está **bloqueado**: a janela de pares {momento}, mas os alunos não vão vê-la. "
+            "Se não for intencional, mude para **Abre pelas datas**."
+        )
+    return avisos
+
+
 def ciclos_da_disciplina(df_ciclos: pd.DataFrame, id_disciplina: str) -> pd.DataFrame:
     df = preparar_ciclos(df_ciclos)
     alvo = str(id_disciplina).strip()

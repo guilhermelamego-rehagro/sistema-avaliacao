@@ -9,6 +9,8 @@ from domain.cadastros import (
     COLUNAS_CICLOS,
     ENCONTRO_OPCOES,
     PAPEIS_DISCIPLINA,
+    STATUS_CICLO_ROTULO,
+    STATUS_CICLO_VALOR,
     STATUS_OPCOES,
     carregar_ciclos,
     carregar_disciplinas,
@@ -459,7 +461,8 @@ def render_ciclos(usuario: dict):
         "Cada ciclo tem **duas linhas do tempo**. **Início do ciclo** e **Apresentação de projeto** "
         "marcam o período acadêmico (dailies e anotações). **Abertura** e **encerramento das pares** "
         "definem a janela em que o aluno avalia os colegas — a liberação segue essas datas. "
-        "**Status inativo** é um kill-switch: força o ciclo fechado mesmo dentro da janela. "
+        "**Status**: *Abre pelas datas* libera as pares sozinho na abertura; *Bloqueado (não abre)* "
+        "mantém fechado mesmo dentro da janela — use só para impedir a abertura de propósito. "
         "Se duas janelas se sobrepuserem no mesmo dia, o aluno vê o ciclo de **maior Ordem**. "
         "A coluna **Ordem** vale dentro de cada disciplina (1, 2, 3…). "
         "Se a disciplina tiver **encontro presencial** e a entrega final for avaliação própria, "
@@ -492,6 +495,7 @@ def render_ciclos(usuario: dict):
         key="cad_ciclo_filtro",
     )
     df_edit = _df_ciclos_para_editor(st.session_state[chave], filtro)
+    df_edit["Status"] = df_edit["Status"].map(lambda s: STATUS_CICLO_ROTULO.get(str(s).strip().lower(), s))
     editor_key = f"editor_ciclos_v3_{filtro}_{st.session_state[ver_ed]}"
     work_key = f"cad_ciclos_work_{filtro}_{st.session_state[ver_ed]}"
     if work_key not in st.session_state:
@@ -532,9 +536,10 @@ def render_ciclos(usuario: dict):
             ),
             "Status": st.column_config.SelectboxColumn(
                 "Status",
-                options=STATUS_OPCOES,
+                options=list(STATUS_CICLO_ROTULO.values()),
                 required=True,
-                help="inativo = kill-switch (fecha pares mesmo com datas abertas).",
+                default=STATUS_CICLO_ROTULO["ativo"],
+                help="Abre pelas datas = libera sozinho na abertura. Bloqueado = não abre nem dentro da janela.",
             ),
             "Ordem": st.column_config.NumberColumn(
                 "Ordem na disciplina",
@@ -550,10 +555,15 @@ def render_ciclos(usuario: dict):
         key=editor_key,
     )
 
-    from domain.ciclos import overlaps_janelas_pares
+    from domain.ciclos import avisos_ciclos_bloqueados, overlaps_janelas_pares
 
-    df_preview = _montar_df_salvar_ciclos(st.session_state[chave], edited, filtro)
+    edited_valores = edited.assign(
+        Status=edited["Status"].map(lambda s: STATUS_CICLO_VALOR.get(s, s))
+    )
+    df_preview = _montar_df_salvar_ciclos(st.session_state[chave], edited_valores, filtro)
     for aviso in overlaps_janelas_pares(df_preview):
+        st.warning(aviso)
+    for aviso in avisos_ciclos_bloqueados(df_preview):
         st.warning(aviso)
 
     if st.button("Salvar ciclos", type="primary", width="stretch", key="cad_ciclos_salvar_btn"):

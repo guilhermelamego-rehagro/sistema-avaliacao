@@ -58,6 +58,8 @@ ALIAS_PROFESSORES = {
 }
 
 STATUS_OPCOES = ["ativo", "inativo"]
+STATUS_CICLO_ROTULO = {"ativo": "Abre pelas datas", "inativo": "Bloqueado (não abre)"}
+STATUS_CICLO_VALOR = {v: k for k, v in STATUS_CICLO_ROTULO.items()}
 TIPOS_PROFESSOR_CONFIG = ["Orientador", "Especialista"]
 PAPEIS_DISCIPLINA = ["Orientador", "Especialista", "Ambos"]
 COLUNAS_PROFESSORES_DISCIPLINA = [
@@ -86,7 +88,7 @@ def _colunas_gravacao(df: pd.DataFrame, obrigatorias: list[str]) -> list[str]:
 
 def _status_norm(valor) -> str:
     texto = str(valor or "").strip().lower()
-    if texto in {"ativo", "ativa", "sim", "s", "1", "true"}:
+    if texto in {"ativo", "ativa", "sim", "s", "1", "true"} or texto.startswith("abre"):
         return "ativo"
     return "inativo"
 

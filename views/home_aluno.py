@@ -42,9 +42,52 @@ def _render_card(tarefa: ResumoTarefa, rota: str):
                 ir_para(rota)
 
 
+def _janelas_indicacao(email: str):
+    try:
+        from domain.indicacao_grupo import janelas_abertas_para_vencedor
+
+        return janelas_abertas_para_vencedor(email)
+    except Exception:
+        return None
+
+
+def _render_avaliar(titulo: str, pares: ResumoTarefa, curso: ResumoTarefa, tem_indicacao: bool):
+    st.subheader(titulo)
+    _render_card(pares, ROTA_PARES_AVALIAR)
+    _render_card(curso, ROTA_CURSO_AVALIAR)
+    if tem_indicacao:
+        with st.container(border=True):
+            st.caption("Pendente")
+            st.markdown("**Indicar colega para o grupo**")
+            st.info(
+                "Você ficou entre os melhores do ciclo e pode indicar um colega "
+                "da oferta para o próximo agrupamento."
+            )
+            if st.button(
+                "Ir para indicação",
+                key="home_btn_indicacao_grupo",
+                type="primary",
+                width="stretch",
+            ):
+                ir_para(ROTA_INDICACAO_GRUPO_ALUNO)
+
+
 def render(usuario: dict):
+    email = usuario["email"]
+    pares = status_avaliacao_pares(email)
+    curso = status_avaliacao_curso(email)
+    janelas_ind = _janelas_indicacao(email)
+    tem_indicacao = janelas_ind is not None and not janelas_ind.empty
+    pendente = tem_indicacao or "pendente" in (pares.status, curso.status)
+
+    if pendente:
+        st.caption(f"Olá, **{usuario['nome']}**.")
+        _render_avaliar("Avaliações pendentes", pares, curso, tem_indicacao)
+        st.divider()
+
     st.header("Calendário")
-    st.caption(f"Olá, **{usuario['nome']}**. Confira a programação e suas avaliações pendentes.")
+    if not pendente:
+        st.caption(f"Olá, **{usuario['nome']}**. Confira a programação e suas avaliações.")
 
     id_disc, nome_disc = obter_disciplina_ativa()
     link_plataforma = link_plataforma_disciplina_ativa(usuario["email"])
@@ -74,32 +117,8 @@ def render(usuario: dict):
             visao_aluno=True,
         )
 
-    st.subheader("Avaliar")
-    email = usuario["email"]
-    _render_card(status_avaliacao_pares(email), ROTA_PARES_AVALIAR)
-    _render_card(status_avaliacao_curso(email), ROTA_CURSO_AVALIAR)
-
-    try:
-        from domain.indicacao_grupo import janelas_abertas_para_vencedor
-
-        janelas_ind = janelas_abertas_para_vencedor(email)
-    except Exception:
-        janelas_ind = None
-    if janelas_ind is not None and not janelas_ind.empty:
-        with st.container(border=True):
-            st.caption("Pendente")
-            st.markdown("**Indicar colega para o grupo**")
-            st.info(
-                "Você ficou entre os melhores do ciclo e pode indicar um colega "
-                "da oferta para o próximo agrupamento."
-            )
-            if st.button(
-                "Ir para indicação",
-                key="home_btn_indicacao_grupo",
-                type="primary",
-                width="stretch",
-            ):
-                ir_para(ROTA_INDICACAO_GRUPO_ALUNO)
+    if not pendente:
+        _render_avaliar("Avaliar", pares, curso, tem_indicacao)
 
     st.caption(
         "Consulte frequência, dailies, comentários da banca e notas em "

@@ -30,6 +30,7 @@ ROTA_MODERACAO = "moderacao"
 ROTA_ORIENTADOR = "orientador"
 ROTA_LANCAR_BANCA = "lancar_banca"
 ROTA_ANOTACOES_DAILY = "anotacoes_daily"
+ROTA_DOSSIE_ALUNO = "dossie_aluno"
 ROTA_ORDEM_APRESENTACAO = "ordem_apresentacao"
 ROTA_FREQ_CONTROLE = "freq_controle"
 ROTA_FREQ_PROGRAMACAO = "freq_programacao"
@@ -71,6 +72,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_PARES_ACOMP,
         ROTA_LANCAR_BANCA,
         ROTA_ANOTACOES_DAILY,
+        ROTA_DOSSIE_ALUNO,
         ROTA_ORDEM_APRESENTACAO,
         ROTA_COORD_CONFIG,
         ROTA_DASHBOARD_CURSO,
@@ -193,6 +195,7 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
     itens_avaliacoes.append(ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"))
     if professor_e_orientador(usuario) or modo_coordenador:
         itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+        itens_avaliacoes.append(ItemMenu(ROTA_DOSSIE_ALUNO, "Dossiê do aluno"))
         itens_avaliacoes.append(
             ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso")
         )

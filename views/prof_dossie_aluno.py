@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import html
+import json
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from data.sheets import ler_aba
 from domain.anotacoes_daily import AVISO_USO_INTERNO
@@ -22,6 +25,7 @@ from domain.dossie_aluno import (
     fmt_num,
     fmt_pct,
     montar_dossie,
+    prompt_feedback,
     resumo_alunos,
 )
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
@@ -31,6 +35,7 @@ from utils.preferencias_sala import selectbox_sala
 
 _VALIDADE_DADOS_S = 600
 _TZ = ZoneInfo("America/Sao_Paulo")
+_URL_GEMINI = "https://gemini.google.com/app"
 
 
 def _tabela_resumo(resumo: pd.DataFrame) -> pd.DataFrame:
@@ -218,6 +223,52 @@ def _render_presenca(d: Dossie):
         )
 
 
+def _botao_copiar_e_abrir(texto: str, rotulo: str, url: str):
+    dados = json.dumps(texto).replace("</", "<\\/")
+    components.html(
+        f"""
+<style>
+  body {{ margin: 0; font-family: "Source Sans Pro", sans-serif; }}
+  button {{ background: #004D28; color: #fff; border: 0; border-radius: 8px; padding: 9px 18px;
+           font-size: 15px; cursor: pointer; }}
+  button:hover {{ background: #003a1e; }}
+  span {{ margin-left: 12px; font-size: 14px; color: #004D28; }}
+</style>
+<button id="b">{html.escape(rotulo)}</button><span id="s"></span>
+<script>
+  const texto = {dados};
+  const aviso = (m) => {{ document.getElementById("s").textContent = m; }};
+  const reserva = () => {{
+    const t = document.createElement("textarea");
+    t.value = texto; document.body.appendChild(t); t.select();
+    const ok = document.execCommand("copy"); t.remove(); return ok;
+  }};
+  document.getElementById("b").addEventListener("click", async () => {{
+    let ok = false;
+    try {{ await navigator.clipboard.writeText(texto); ok = true; }} catch (e) {{ ok = reserva(); }}
+    window.open({json.dumps(url)}, "_blank", "noopener");
+    aviso(ok ? "Copiado! No Gemini, cole com Ctrl+V e envie."
+             : "Não consegui copiar — abra “Ver o prompt completo” e use o ícone de copiar.");
+  }});
+</script>
+""",
+        height=48,
+    )
+
+
+def _render_prompt_gemini(ctx, d: Dossie):
+    st.markdown("**Rascunho de feedback com o Gemini**")
+    st.caption(
+        "O botão copia um prompt pronto (instruções + dossiê) e abre o Gemini numa nova aba. "
+        "Entre com a sua conta Rehagro, cole com Ctrl+V e envie. Revise o rascunho antes de usar: "
+        "a IA pode errar ou exagerar, e a conversa é sua."
+    )
+    prompt = prompt_feedback(ctx, d)
+    _botao_copiar_e_abrir(prompt, "Copiar prompt e abrir o Gemini", _URL_GEMINI)
+    with st.expander("Ver o prompt completo"):
+        st.code(prompt, language=None, wrap_lines=True)
+
+
 def _render_dossie(ctx, d: Dossie):
     st.subheader(d.nome)
     st.caption(f"Grupo {d.grupo}" + (f" · Sala {d.sala}" if d.sala else "") + f" · {ctx.nome_ciclo}")
@@ -225,7 +276,7 @@ def _render_dossie(ctx, d: Dossie):
     _render_comparacao_sala(d)
     _render_sinais(d)
 
-    abas = st.tabs(["Dailies", "Pares", "Banca", "Atividades", "Presença", "Texto para copiar"])
+    abas = st.tabs(["Dailies", "Pares", "Banca", "Atividades", "Presença", "Feedback com IA"])
     with abas[0]:
         _render_dailies(d)
     with abas[1]:
@@ -237,7 +288,10 @@ def _render_dossie(ctx, d: Dossie):
     with abas[4]:
         _render_presenca(d)
     with abas[5]:
+        _render_prompt_gemini(ctx, d)
+        st.divider()
         texto = dossie_em_texto(ctx, d)
+        st.markdown("**Só o resumo (sem instruções para a IA)**")
         st.caption(
             "Resumo em texto com só o primeiro nome, sem e-mails e com os feedbacks dos colegas anônimos. "
             "Use o ícone de copiar no canto do quadro."

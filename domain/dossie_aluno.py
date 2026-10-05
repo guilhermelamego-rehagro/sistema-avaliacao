@@ -726,3 +726,35 @@ def dossie_em_texto(ctx: ContextoCiclo, d: Dossie) -> str:
     if d.lacunas:
         l += ["", "Dados ausentes:"] + [f"- {s}" for s in d.lacunas]
     return "\n".join(l)
+
+
+_INSTRUCOES_PROMPT = """Você vai ajudar uma orientadora da graduação em Gestão do Agronegócio da Rehagro a preparar uma conversa individual de feedback com {nome} sobre o {ciclo}. No curso, os alunos trabalham em grupos fixos num projeto de consultoria para um cliente real, com aulas, dailies (encontros curtos do grupo com a orientadora), avaliação entre colegas (pares) e apresentação para uma banca ao fim de cada ciclo.
+
+Abaixo está o dossiê de {nome}, gerado pelo sistema de avaliação. Escreva um rascunho de feedback com estas seções:
+
+1. Visão geral — 2 a 3 frases sobre o desempenho no ciclo.
+2. Pontos fortes — cada um apoiado em um dado ou trecho concreto do dossiê.
+3. Pontos de desenvolvimento — formulados de forma construtiva, também com a evidência.
+4. Sugestões para o próximo ciclo — 2 ou 3 ações práticas e específicas.
+5. Perguntas para abrir a conversa — 3 perguntas abertas que convidem {nome} a refletir.
+6. Pontos para a orientadora confirmar antes da conversa — dados ausentes, ambíguos ou que podem ter outra explicação.
+7. Mensagem curta — até 5 frases que a orientadora possa enviar por escrito a {nome}, se quiser.
+
+Regras:
+- Use só as informações do dossiê. Não invente fatos, números nem situações.
+- Dado ausente não é falha do aluno: pode ser que não tenha sido registrado. Coloque na seção 6.
+- Comentários da banca e anotações de daily são sobre o grupo; só atribua algo a {nome} quando o trecho o citar.
+- Não ser citado numa anotação de daily não significa participação ruim; trate como algo a confirmar.
+- Escalas: pares de 0 a 5, orientador e banca de 0 a 10, atividades de 0 a 100. Diferenças pequenas (até 0,3 nos pares ou 0,5 no orientador) não são relevantes.
+- Para comparar com a sala, use a posição e os quartis informados; não exagere diferenças.
+- Os feedbacks dos colegas são anônimos: não tente identificar autores e cite-os de forma resumida.
+- "Destaques" e "Pontos de atenção" foram gerados por regras automáticas simples; use como pistas, confirmando nos dados.
+- Tom acolhedor, direto e respeitoso, tratando {nome} pelo primeiro nome. Português do Brasil. No máximo 450 palavras no total.
+
+--- DOSSIÊ ---
+"""
+
+
+def prompt_feedback(ctx: ContextoCiclo, d: Dossie) -> str:
+    """Instruções para a IA + dossiê em texto, prontos para colar no Gemini."""
+    return _INSTRUCOES_PROMPT.format(nome=d.primeiro_nome, ciclo=ctx.nome_ciclo) + dossie_em_texto(ctx, d)

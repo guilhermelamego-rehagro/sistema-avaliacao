@@ -27,6 +27,8 @@ CITA_AMBIGUA = "ambígua"
 CITA_NAO = "não"
 
 _RE_COMENTARIO_AUTOMATICO = re.compile(r"(lancamento|conferencia) coordenador")
+# Em produção não há matrícula no Supabase: inativos ficam em salas próprias da Entrância.
+_RE_SALA_INATIVA = re.compile(r"inativ|desist|trancad|cancel|evadid")
 
 _PARTICULAS = {
     "de", "da", "do", "das", "dos", "e", "di", "du", "del", "della", "van", "von",
@@ -152,6 +154,7 @@ def _alunos_disciplina(id_disciplina: str) -> pd.DataFrame:
     vazio = {"", "nan", "none", "—", "–", "-"}
     out = out[out["Email"].ne("") & ~out["Grupo"].str.lower().isin(vazio)]
     out["Sala"] = out["Sala"].where(~out["Sala"].str.lower().isin(vazio), "")
+    out = out[~out["Sala"].map(lambda s: bool(_RE_SALA_INATIVA.search(_sem_acento(s))))]
     return out.drop_duplicates("Email").sort_values("Nome").reset_index(drop=True)
 
 
@@ -426,7 +429,7 @@ def combinar_resumos(resumos: list[pd.DataFrame]) -> pd.DataFrame:
     return _ordenar_resumo(linhas)
 
 
-_RE_SALA_FORA = re.compile(r"teste|inativ|sem grupo|trancad|desist|cancel|evadid")
+_RE_SALA_FORA = re.compile(r"teste|sem grupo")
 
 
 def salas_comparacao_padrao(resumo: pd.DataFrame) -> list[str]:
@@ -501,6 +504,7 @@ class Dossie:
     aulas: dict
     dailies: dict
     ciclos: list[DossieCiclo]
+    resultado_final: object | None = None
     destaques: list[str] = field(default_factory=list)
     atencao: list[str] = field(default_factory=list)
     lacunas: list[str] = field(default_factory=list)
@@ -772,8 +776,12 @@ def montar_dossie(
     resumos: list[pd.DataFrame],
     email: str,
     salas_ref: list[str] | None = None,
+    resultado_final=None,
 ) -> Dossie | None:
-    """Dossiê de um ou mais ciclos; indicadores somados e comparados com as salas de referência."""
+    """Dossiê de um ou mais ciclos; indicadores somados e comparados com as salas de referência.
+
+    ``resultado_final`` (situação no fechamento da disciplina) entra no texto e no prompt.
+    """
     email = str(email).strip().lower()
     total = combinar_resumos(resumos)
     linha = total[total["Email"] == email] if not total.empty else total
@@ -804,6 +812,7 @@ def montar_dossie(
         aulas=_resumo_presenca(_juntar_presenca([ctx.aulas for ctx in ctxs]), email),
         dailies=_resumo_presenca(_juntar_presenca([ctx.dailies for ctx in ctxs]), email),
         ciclos=ciclos,
+        resultado_final=resultado_final,
     )
     _sinais(d)
     d.lacunas = [d.prefixo(c) + item for c in ciclos for item in c.lacunas]
@@ -872,6 +881,32 @@ def _texto_ciclo(d: Dossie, c: DossieCiclo) -> list[str]:
     return l
 
 
+def _fmt_peso(valor) -> str:
+    v = float(valor)
+    return fmt_num(v, 0) if v.is_integer() else fmt_num(v, 1)
+
+
+def _texto_situacao_final(r) -> list[str]:
+    if r is None:
+        return []
+    p = r.presenca
+    presenca = f"; presença {fmt_pct(p['pct'])} no total da disciplina" if p["total"] else ""
+    l = [f"Situação final na disciplina: {r.situacao} — nota final {fmt_num(r.nota_final)}/100{presenca}."]
+    if r.segunda_chamada:
+        l.append("Em segunda chamada.")
+    if r.motivos:
+        l.append("Motivos (calculados pelo sistema):")
+        l += [f"- {m}" for m in r.motivos]
+    if not r.componentes.empty:
+        l.append("Composição da nota final:")
+        for _, c in r.componentes.iterrows():
+            nota = "sem nota" if pd.isna(c["Nota"]) else f"nota {fmt_num(c['Nota'])}"
+            pontos = fmt_num(c["Pontos"]) if not pd.isna(c["Pontos"]) else "0"
+            detalhe = f" ({c['Detalhe']})" if c["Detalhe"] else ""
+            l.append(f"- {c['Componente']} (peso {_fmt_peso(c['Peso'])}%): {nota} → {pontos} de {_fmt_peso(c['Peso'])} pontos{detalhe}")
+    return l + [""]
+
+
 def _evolucao_ciclo(c: DossieCiclo) -> str:
     ind = c.indicadores
     partes = [
@@ -902,6 +937,7 @@ def dossie_em_texto(d: Dossie) -> str:
         f"{d.referencia} ({d.n_referencia} alunos).",
         "",
     ]
+    l += _texto_situacao_final(d.resultado_final)
     if d.varios_ciclos:
         l.append("Visão consolidada dos ciclos selecionados:")
 
@@ -960,6 +996,37 @@ _CONTEXTO_CURSO = (
 )
 
 
+def _intro_situacao_final(r, nome: str) -> str:
+    texto = f" A disciplina foi encerrada e a situação final de {nome} é: {r.situacao}"
+    if r.segunda_chamada:
+        texto += ", com segunda chamada pendente"
+    return texto + "."
+
+
+def _futuro_situacao_final(r) -> str:
+    from domain.situacao_final import APROVADO, RECUPERACAO, REPROVADO_FREQUENCIA, REPROVADO_NOTA
+
+    if r.segunda_chamada and r.situacao != REPROVADO_FREQUENCIA:
+        return (
+            "Próximos passos para a segunda chamada — o que fazer para concluí-la e o que mais precisa de "
+            "atenção, ligado aos motivos."
+        )
+    return {
+        APROVADO: (
+            "Orientações para os próximos projetos — 2 ou 3 recomendações práticas para levar aos próximos "
+            "projetos e à vida profissional."
+        ),
+        RECUPERACAO: "Plano para a recuperação — 2 ou 3 prioridades concretas, ligadas aos motivos da situação.",
+        REPROVADO_NOTA: (
+            "Caminhos para refazer a disciplina — 2 ou 3 mudanças concretas para a próxima vez, ligadas aos motivos."
+        ),
+        REPROVADO_FREQUENCIA: (
+            "Caminhos para refazer a disciplina — 2 ou 3 mudanças concretas, com foco em presença e organização "
+            "da rotina."
+        ),
+    }.get(r.situacao, "")
+
+
 def _sobre(d: Dossie) -> str:
     if d.varios_ciclos:
         return f"os {d.titulo}" if d.titulo.startswith("Ciclos") else f"os ciclos {d.titulo}"
@@ -970,11 +1037,12 @@ def prompt_feedback(d: Dossie) -> str:
     """Instruções para a IA + dossiê em texto, prontos para colar no Gemini."""
     nome = d.primeiro_nome
     finais = d.ciclos_finais
+    r = d.resultado_final
     intro = (
         f"Você vai ajudar uma orientadora da graduação em Gestão do Agronegócio do Rehagro a preparar uma "
         f"conversa individual de feedback com {nome} sobre {_sobre(d)}. {_CONTEXTO_CURSO}"
     )
-    if finais:
+    if finais and r is None:
         intro += (
             f" O {titulo_ciclos(finais)} corresponde à entrega final do projeto: não há próximo ciclo, "
             "então as orientações devem mirar os próximos projetos."
@@ -990,6 +1058,10 @@ def prompt_feedback(d: Dossie) -> str:
         )
     else:
         futuro = "Sugestões para o próximo ciclo — 2 ou 3 ações práticas e específicas."
+    if r is not None:
+        intro += _intro_situacao_final(r, nome)
+        visao += " Diga a situação final e o principal motivo que levou a ela."
+        futuro = _futuro_situacao_final(r) or futuro
     regras = [
         "Use só as informações do dossiê. Não invente fatos, números nem situações.",
         "Dado ausente não é falha do aluno: pode ser que não tenha sido registrado. Coloque na seção 6.",
@@ -1003,6 +1075,12 @@ def prompt_feedback(d: Dossie) -> str:
         "“Destaques” e “Pontos de atenção” foram gerados por regras automáticas simples; use como pistas, "
         "confirmando nos dados.",
     ]
+    if r is not None:
+        regras.append(
+            "Explique a situação final pelos motivos e pela composição da nota informados no dossiê, com "
+            "clareza e sem tom punitivo. Nota mínima para aprovação: 70; recuperação: de 40 a 69,9; presença "
+            "mínima: 75%."
+        )
     if d.varios_ciclos:
         regras.append(
             "O dossiê traz uma visão consolidada e o detalhe de cada ciclo. Compare os ciclos: aponte melhoras, "

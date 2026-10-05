@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from data.sheets import ler_aba, limpar_cache_planilhas, planilha
+from utils.leitura_lote import memorizar_em_lote
 
 COLUNAS = (
     "Data_Hora",
@@ -117,6 +118,7 @@ def _carregar_sheets() -> pd.DataFrame:
     return _normalizar(df)
 
 
+@memorizar_em_lote
 def carregar_avaliacoes_pares() -> pd.DataFrame:
     """Supabase tipado no teste; Sheets em produção ou como fallback."""
     try:

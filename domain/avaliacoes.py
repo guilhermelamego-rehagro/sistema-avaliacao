@@ -9,6 +9,7 @@ import pandas as pd
 
 from config import ABAS_AVALIACAO
 from data.sheets import ler_aba, limpar_cache_planilhas, planilha
+from utils.leitura_lote import memorizar_em_lote
 
 _COLUNAS_GRUPO = ABAS_AVALIACAO["Avaliacao_Grupo"]
 
@@ -24,6 +25,7 @@ def _carregar_avaliacoes_orientador_sheets() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@memorizar_em_lote
 def _carregar_avaliacoes_orientador() -> pd.DataFrame:
     """Supabase tipado no teste; Sheets em produção ou como fallback."""
     try:

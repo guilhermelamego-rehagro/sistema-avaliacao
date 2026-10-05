@@ -33,6 +33,16 @@ from domain.dossie_aluno import (
     titulo_ciclos,
 )
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
+from domain.situacao_final import (
+    APROVADO,
+    PENDENTE,
+    RECUPERACAO,
+    SEGUNDA_CHAMADA,
+    SITUACOES,
+    calcular_resultados,
+    fmt_peso,
+    periodos_ciclos,
+)
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 from utils.preferencias_sala import selectbox_sala
@@ -44,14 +54,29 @@ _MODO_UM = "Um ciclo"
 _MODO_VARIOS = "Vários ciclos"
 
 
-def _tabela_resumo(resumo: pd.DataFrame) -> pd.DataFrame:
+def _tabela_resumo(resumo: pd.DataFrame, resultados: dict | None = None) -> pd.DataFrame:
     def _fracao(a, b):
         return f"{int(a)} de {int(b)}" if b else "—"
 
+    finais = {}
+    if resultados is not None:
+        def _situacao(e):
+            r = resultados.get(e)
+            if r is None:
+                return "—"
+            return r.situacao + (" · 2ª chamada" if r.segunda_chamada else "")
+
+        finais = {
+            "Situação final": resumo["Email"].map(_situacao),
+            "Nota final": resumo["Email"].map(
+                lambda e: fmt_num(resultados[e].nota_final) if e in resultados else "—"
+            ),
+        }
     return pd.DataFrame(
         {
             "Aluno": resumo["Nome"],
             "Grupo": resumo["Grupo"],
+            **finais,
             "Aulas": resumo["Pct_Aulas"].map(fmt_pct),
             "Dailies": resumo["Pct_Dailies"].map(fmt_pct),
             "Pares recebida (0–5)": resumo["Pares_Media"].map(fmt_num),
@@ -153,6 +178,29 @@ def _render_evolucao(d: Dossie):
         )
     st.markdown("**Evolução por ciclo**")
     st.dataframe(pd.DataFrame(linhas), width="stretch", hide_index=True)
+
+
+def _render_situacao_final(d: Dossie):
+    r = d.resultado_final
+    caixa = {APROVADO: st.success, RECUPERACAO: st.warning, PENDENTE: st.info}.get(r.situacao, st.error)
+    segunda = " · Segunda chamada" if r.segunda_chamada else ""
+    caixa(
+        f"**Situação final: {r.situacao}{segunda}** — nota final {fmt_num(r.nota_final)}, "
+        f"presença {fmt_pct(r.presenca['pct'])} no total da disciplina\n\n"
+        + "\n".join(f"- {m}" for m in r.motivos)
+    )
+    if not r.componentes.empty:
+        with st.expander("Composição da nota final"):
+            visao = r.componentes.copy()
+            visao["Peso"] = visao["Peso"].map(lambda v: f"{fmt_peso(v)}%")
+            for col in ("Nota", "Pontos", "Perdeu"):
+                visao[col] = visao[col].map(fmt_num)
+            st.dataframe(visao, width="stretch", hide_index=True)
+            st.caption("Pontos = quanto o componente somou na nota final (de 0 até o peso). Perdeu = peso − pontos.")
+    st.caption(
+        "Mesmo boletim e mesmas regras da Liberação de notas: aprovação com 70, recuperação de 40 a 69,9 e "
+        "reprovação por frequência abaixo de 75% de presença."
+    )
 
 
 def _render_sinais(d: Dossie):
@@ -301,7 +349,12 @@ def _render_prompt_gemini(d: Dossie):
         "Entre com a sua conta do Rehagro, cole com Ctrl+V e envie. Revise o rascunho antes de usar: "
         "a IA pode errar ou exagerar, e a conversa é sua."
     )
-    if d.ciclos_finais:
+    if d.resultado_final is not None:
+        st.caption(
+            f"Inclui a situação final ({d.resultado_final.situacao}) e os motivos: o prompt pede um feedback "
+            "de encerramento, com próximos passos adequados a essa situação."
+        )
+    elif d.ciclos_finais:
         st.caption(
             f"Inclui a entrega final ({titulo_ciclos(d.ciclos_finais)}): o prompt pede orientações para os "
             "próximos projetos, em vez de sugestões para o próximo ciclo."
@@ -315,6 +368,8 @@ def _render_prompt_gemini(d: Dossie):
 def _render_dossie(d: Dossie):
     st.subheader(d.nome)
     st.caption(f"Grupo {d.grupo}" + (f" · Sala {d.sala}" if d.sala else "") + f" · {d.titulo}")
+    if d.resultado_final is not None:
+        _render_situacao_final(d)
     _render_metricas(d)
     _render_comparacao_sala(d)
     if d.varios_ciclos:
@@ -379,6 +434,26 @@ def _carregar_ciclos(id_disc: str, ciclos_sel: pd.DataFrame, usuario: dict) -> t
     return ctxs, resumos, min(horarios), chaves
 
 
+def _resultados_finais(id_disc: str, base: pd.DataFrame, ciclos: pd.DataFrame, chave: str) -> dict:
+    """Situação final dos alunos filtrados; calcula só quem ainda não está na sessão."""
+    guardado = st.session_state.get(chave)
+    if guardado is None or time.time() - guardado[0] > _VALIDADE_DADOS_S:
+        guardado = (time.time(), {})
+    faltando = base[~base["Email"].isin(guardado[1])]
+    if not faltando.empty:
+        barra = st.progress(0.0, text="Calculando a situação final (boletim de cada aluno)…")
+        novos = calcular_resultados(
+            id_disc,
+            faltando,
+            periodos_ciclos(ciclos),
+            ao_avancar=lambda i, n: barra.progress(i / n, text=f"Calculando a situação final… {i} de {n} alunos"),
+        )
+        barra.empty()
+        guardado = (guardado[0], {**guardado[1], **novos})
+        st.session_state[chave] = guardado
+    return {e: guardado[1][e] for e in base["Email"] if e in guardado[1]}
+
+
 def render(usuario: dict):
     st.header("Dossiê do aluno")
     st.caption(
@@ -425,8 +500,9 @@ def render(usuario: dict):
         f"Dados carregados às {datetime.fromtimestamp(carregado_em, _TZ):%H:%M}. "
         "Lançamentos feitos depois disso aparecem ao atualizar."
     )
+    chave_final = f"_dossie_final|{id_disc}"
     if a2.button("Atualizar dados", width="stretch", key="dossie_atualizar"):
-        for chave in chaves:
+        for chave in chaves + [chave_final]:
             st.session_state.pop(chave, None)
         st.rerun()
     if resumo.empty:
@@ -458,8 +534,46 @@ def render(usuario: dict):
         "de alunos ativos; sem nenhuma marcada, a comparação é com a sala do aluno.",
     )
 
+    resultados = None
+    if st.toggle(
+        "Situação final (encerramento da disciplina)",
+        key=f"dossie_encerramento_{id_disc}",
+        help="Calcula o boletim de cada aluno filtrado (mesmas regras da Liberação de notas), permite filtrar "
+        "por situação e mostra no dossiê os motivos que levaram a ela.",
+    ):
+        resultados = _resultados_finais(id_disc, base, ciclos, chave_final)
+        presentes = {r.situacao for r in resultados.values()}
+        opcoes_sit = [s for s in SITUACOES if s in presentes]
+        if any(r.segunda_chamada for r in resultados.values()):
+            opcoes_sit.append(SEGUNDA_CHAMADA)
+
+        def _contagem(s):
+            if s == SEGUNDA_CHAMADA:
+                return sum(bool(r.segunda_chamada) for r in resultados.values())
+            return sum(r.situacao == s for r in resultados.values())
+
+        chave_sit = f"dossie_situacao_{id_disc}"
+        if chave_sit in st.session_state:
+            st.session_state[chave_sit] = [s for s in st.session_state[chave_sit] if s in opcoes_sit]
+        sel = st.multiselect(
+            "Situação final:",
+            opcoes_sit,
+            format_func=lambda s: f"{s} ({_contagem(s)})",
+            key=chave_sit,
+            placeholder="Todas",
+        )
+        if sel:
+            def _passa(e):
+                r = resultados.get(e)
+                return r is not None and (r.situacao in sel or (SEGUNDA_CHAMADA in sel and bool(r.segunda_chamada)))
+
+            base = base[base["Email"].map(_passa)]
+        if base.empty:
+            st.info("Nenhum aluno nesta situação com os filtros atuais.")
+            return
+
     st.markdown(f"#### Visão geral — {titulo}")
-    st.dataframe(_tabela_resumo(base), width="stretch", hide_index=True)
+    st.dataframe(_tabela_resumo(base, resultados), width="stretch", hide_index=True)
 
     st.divider()
     nomes_alunos = dict(zip(base["Email"], base["Nome"]))
@@ -470,7 +584,8 @@ def render(usuario: dict):
         format_func=lambda e: nomes_alunos.get(e, e),
         key=f"dossie_aluno_{sala}_{grupo}",
     )
-    dossie = montar_dossie(ctxs, resumos, email, salas_ref) if email else None
+    resultado = resultados.get(email) if resultados and email else None
+    dossie = montar_dossie(ctxs, resumos, email, salas_ref, resultado) if email else None
     if dossie is None:
         st.info("Selecione um aluno.")
         return

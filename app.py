@@ -594,9 +594,9 @@ else:
             nps = st.slider("Em uma escala de 0 a 10, qual a probabilidade de recomendar este curso?", min_value=0, max_value=10, value=10)
             
             st.write("---")
-            que_bom = st.text_area("Que Bom que... (Opcional)")
-            que_pena = st.text_area("Que Pena que... (Opcional)")
-            que_tal = st.text_area("Que Tal se... (Opcional)")
+            que_bom = st.text_area("Que Bom que...")
+            que_pena = st.text_area("Que Pena que...")
+            que_tal = st.text_area("Que Tal se...")
             
             enviar_curso = st.form_submit_button(
                 "Enviar Avaliação do Curso",

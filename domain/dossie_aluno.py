@@ -392,7 +392,8 @@ class Dossie:
     grupo: str
     indicadores: dict
     medias_grupo: dict
-    medias_turma: dict
+    referencia: str
+    estatisticas: dict
     aulas: dict
     dailies: dict
     linha_dailies: pd.DataFrame
@@ -407,11 +408,52 @@ class Dossie:
     lacunas: list[str]
 
 
-_COLUNAS_MEDIA = ("Pct_Aulas", "Pct_Dailies", "Pares_Media", "Orientador", "Atividades_Media")
+INDICADORES = (
+    ("Pct_Aulas", "Presença nas aulas", fmt_pct),
+    ("Pct_Dailies", "Presença nas dailies", fmt_pct),
+    ("Pares_Media", "Pares recebida (0–5)", fmt_num),
+    ("Orientador", "Orientador (0–10)", fmt_num),
+    ("Atividades_Media", "Atividades (0–100)", fmt_num),
+)
+_COLUNAS_MEDIA = tuple(c for c, _, _ in INDICADORES)
 
 
 def _medias(df: pd.DataFrame) -> dict:
     return {c: _media(df[c].tolist()) for c in _COLUNAS_MEDIA} if not df.empty else {}
+
+
+def estatisticas_referencia(valores, valor) -> dict | None:
+    """Média, quartis e posição do aluno; percentil conta empates pela metade."""
+    nums = sorted(float(v) for v in valores if v is not None and not pd.isna(v))
+    if not nums:
+        return None
+    serie = pd.Series(nums)
+    est = {
+        "n": len(nums),
+        "media": float(serie.mean()),
+        "q1": float(serie.quantile(0.25)),
+        "mediana": float(serie.median()),
+        "q3": float(serie.quantile(0.75)),
+        "percentil": None,
+        "posicao": "",
+    }
+    if valor is None or pd.isna(valor) or len(nums) < 4:
+        return est
+    v = float(valor)
+    abaixo = sum(x < v for x in nums)
+    iguais = sum(x == v for x in nums)
+    est["percentil"] = (abaixo + iguais / 2) / len(nums) * 100
+    if v == nums[-1] and v >= est["q3"]:
+        est["posicao"] = "no topo" if iguais == 1 else "no topo (empatado)"
+    elif v == nums[0] and v <= est["q1"]:
+        est["posicao"] = "na base" if iguais == 1 else "na base (empatado)"
+    elif v > est["q3"]:
+        est["posicao"] = "quartil superior"
+    elif v < est["q1"]:
+        est["posicao"] = "quartil inferior"
+    else:
+        est["posicao"] = "faixa central"
+    return est
 
 
 def _linha_dailies(ctx: ContextoCiclo, email: str, citacoes: list[dict]) -> pd.DataFrame:
@@ -509,6 +551,7 @@ def montar_dossie(ctx: ContextoCiclo, resumo: pd.DataFrame, email: str) -> Dossi
     ind = linha.iloc[0].to_dict()
     sala, grupo = ind["Sala"], ind["Grupo"]
     grupo_df = resumo[(resumo["Sala"] == sala) & (resumo["Grupo"] == grupo) & (resumo["Email"] != email)]
+    ref_df = resumo[resumo["Sala"] == sala] if sala else resumo
 
     recebidas = ctx.pares[ctx.pares["Email_Avaliado"] == email] if not ctx.pares.empty else ctx.pares
     comentarios, ocultos = [], 0
@@ -556,7 +599,10 @@ def montar_dossie(ctx: ContextoCiclo, resumo: pd.DataFrame, email: str) -> Dossi
         grupo=grupo,
         indicadores=ind,
         medias_grupo=_medias(grupo_df),
-        medias_turma=_medias(resumo),
+        referencia=f"sala {sala}" if sala else "turma",
+        estatisticas={
+            col: estatisticas_referencia(ref_df[col].tolist(), ind[col]) for col in _COLUNAS_MEDIA
+        },
         aulas=_resumo_presenca(ctx.aulas, email),
         dailies=_resumo_presenca(ctx.dailies, email),
         linha_dailies=_linha_dailies(ctx, email, citacoes),
@@ -594,11 +640,19 @@ def montar_dossie(ctx: ContextoCiclo, resumo: pd.DataFrame, email: str) -> Dossi
 
 def _comparacao(d: Dossie, chave: str, fmt) -> str:
     partes = []
-    for rotulo, medias in (("grupo", d.medias_grupo), ("turma", d.medias_turma)):
-        valor = medias.get(chave)
-        if valor is not None:
-            partes.append(f"{rotulo} {fmt(valor)}")
-    return f" | média: {', '.join(partes)}" if partes else ""
+    media_g = d.medias_grupo.get(chave)
+    if media_g is not None:
+        partes.append(f"média do grupo {fmt(media_g)}")
+    est = d.estatisticas.get(chave)
+    if est:
+        ref = (
+            f"{d.referencia}: média {fmt(est['media'])}, mediana {fmt(est['mediana'])}, "
+            f"Q1–Q3 {fmt(est['q1'])} a {fmt(est['q3'])}"
+        )
+        if est["percentil"] is not None:
+                ref += f", percentil {fmt_num(est['percentil'], 0)} — {est['posicao']}"
+        partes.append(ref)
+    return f" | {'; '.join(partes)}" if partes else ""
 
 
 def dossie_em_texto(ctx: ContextoCiclo, d: Dossie) -> str:

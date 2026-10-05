@@ -15,6 +15,7 @@ from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import indice_ciclo_academico_padrao, ordenar_ciclos
 from domain.dossie_aluno import (
     CITA_NAO,
+    INDICADORES,
     Dossie,
     carregar_contexto,
     dossie_em_texto,
@@ -87,6 +88,31 @@ def _render_metricas(d: Dossie):
     st.caption("A comparação “vs grupo” usa a média dos demais integrantes do grupo.")
 
 
+def _render_comparacao_sala(d: Dossie):
+    linhas = []
+    for col, rotulo, fmt in INDICADORES:
+        est = d.estatisticas.get(col)
+        linhas.append(
+            {
+                "Indicador": rotulo,
+                "Aluno": fmt(d.indicadores[col]),
+                "Média do grupo": fmt(d.medias_grupo.get(col)),
+                "Média": fmt(est["media"]) if est else "—",
+                "Q1": fmt(est["q1"]) if est else "—",
+                "Mediana": fmt(est["mediana"]) if est else "—",
+                "Q3": fmt(est["q3"]) if est else "—",
+                "Percentil": fmt_num(est["percentil"], 0) if est and est["percentil"] is not None else "—",
+                "Posição": est["posicao"].capitalize() if est and est["posicao"] else "—",
+            }
+        )
+    st.markdown(f"**Comparação com a {d.referencia}**")
+    st.dataframe(pd.DataFrame(linhas), width="stretch", hide_index=True)
+    st.caption(
+        "Q1, mediana e Q3 dividem a sala em quatro partes iguais (25% dos alunos abaixo de Q1, 25% acima de Q3). "
+        "Percentil = % da sala com resultado abaixo do aluno (empates contam pela metade)."
+    )
+
+
 def _render_sinais(d: Dossie):
     c1, c2 = st.columns(2)
     with c1:
@@ -135,7 +161,7 @@ def _render_pares(d: Dossie):
         st.markdown(
             f"**Recebida:** média {fmt_num(ind['Pares_Media'])}/5 de {ind['Pares_N']} colega(s) "
             f"— média do grupo {fmt_num(d.medias_grupo.get('Pares_Media'))}, "
-            f"turma {fmt_num(d.medias_turma.get('Pares_Media'))}."
+            f"{d.referencia} {fmt_num((d.estatisticas.get('Pares_Media') or {}).get('media'))}."
         )
     st.markdown("**Feedbacks recebidos dos colegas**")
     if d.comentarios_pares:
@@ -196,6 +222,7 @@ def _render_dossie(ctx, d: Dossie):
     st.subheader(d.nome)
     st.caption(f"Grupo {d.grupo}" + (f" · Sala {d.sala}" if d.sala else "") + f" · {ctx.nome_ciclo}")
     _render_metricas(d)
+    _render_comparacao_sala(d)
     _render_sinais(d)
 
     abas = st.tabs(["Dailies", "Pares", "Banca", "Atividades", "Presença", "Texto para copiar"])

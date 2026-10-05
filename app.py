@@ -463,7 +463,7 @@ else:
                 st.subheader(f"👤 {colega['Nome_Completo']}")
                 
                 nota = st.radio("Nota (0 a 5):", [0, 1, 2, 3, 4, 5], index=None, horizontal=True, key=f"n_{index}")
-                coment = st.text_area("Feedback (opcional):", placeholder="Escreva seu feedback aqui...", key=f"c_{index}")
+                coment = st.text_area("Feedback:", placeholder="Escreva seu feedback aqui...", key=f"c_{index}")
                 
                 respostas_pares[colega['Email_Pessoal']] = {"nome": colega['Nome_Completo'], "nota": nota, "coment": coment}
 

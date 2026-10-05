@@ -103,6 +103,7 @@ from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grup
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
 from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
 from utils.preferencias_sala import selectbox_sala
+from utils.rolagem import rolar_topo_ao_trocar_tela
 from utils.ordenacao import ordenar_grupos_lista
 
 # 1. Configurações Iniciais da Página
@@ -376,6 +377,7 @@ else:
         st.session_state["escolha_menu"] = LEGACY_ROUTES[st.session_state["escolha_menu"]]
 
     menu = renderizar_sidebar(aluno, perfil)
+    rolar_topo_ao_trocar_tela(f"{aluno.get('email', '')}|{perfil}|{menu}")
     render_banner_impersonacao()
 
     hoje = hoje_normalizado()

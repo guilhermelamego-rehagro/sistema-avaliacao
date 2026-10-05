@@ -702,6 +702,19 @@ def _anos_da_agenda(agenda: pd.DataFrame) -> pd.Series:
     return agenda["Data"].map(lambda v: (_como_date(v) or date.min).year)
 
 
+def _card_pares_docente(usuario: dict | None, id_disc: str):
+    if not usuario or usuario.get("perfil") != "Professor":
+        return
+    from auth.supabase_auth import professor_e_orientador, usuario_e_coordenador
+
+    modo_coord = usuario_e_coordenador(usuario) and st.session_state.get("modo_coordenador")
+    if not (professor_e_orientador(usuario) or modo_coord):
+        return
+    from views import card_pares_docente
+
+    card_pares_docente.render(id_disc)
+
+
 def _banner_anotacoes_daily_hoje(usuario: dict | None, id_disc: str):
     if not usuario or usuario.get("perfil") != "Professor":
         return
@@ -820,6 +833,7 @@ def render(
         id_disc = normalizar_id(id_disciplina_por_nome(df_disc, nome))
 
     _banner_anotacoes_daily_hoje(usuario, id_disc)
+    _card_pares_docente(usuario, id_disc)
     _render_agenda(id_disc, pode_editar=pode_editar, usuario=usuario, visao_aluno=visao_aluno)
 
     if pode_editar:

@@ -104,6 +104,8 @@ try:
 except ImportError:
     ROTA_DOSSIE_ALUNO = "dossie_aluno"
 
+from navigation import ROTA_FEEDBACK_PROF
+
 from views import aluno_avaliacao_grupo, aluno_minhas_notas, prof_avaliacao_grupo, prof_avaliacao_orientador
 from views import prof_config_componentes, prof_coordenador, prof_coordenador_entregas, prof_import_canvas
 from views import home_aluno, prof_anotacoes_daily, prof_alunos_ficha, prof_cadastros, prof_calendario, prof_controle_presenca, prof_dashboard_curso, prof_formacao_grupos, prof_liberacao_notas, prof_matriculas_oferta, prof_ordem_apresentacao, prof_planejamento, prof_presenca_encontro
@@ -1486,6 +1488,17 @@ else:
             from views import prof_dossie_aluno
 
             prof_dossie_aluno.render(aluno)
+
+    elif menu == ROTA_FEEDBACK_PROF and perfil == "Professor" and (
+        professor_e_orientador(aluno)
+        or (usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"))
+    ):
+        from domain.feedback_aluno import feedback_ativo_professores
+
+        if feedback_ativo_professores():
+            from views import prof_feedback_aluno
+
+            prof_feedback_aluno.render(aluno)
 
     elif menu == ROTA_LIBERAR_NOTAS and perfil == "Professor" and pode_gerenciar_liberacao_notas(aluno):
         prof_liberacao_notas.render(aluno)

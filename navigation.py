@@ -189,40 +189,62 @@ def _secoes_aluno() -> list[SecaoMenu]:
 
 
 def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[SecaoMenu]:
-    from auth.supabase_auth import professor_e_orientador
+    from auth.supabase_auth import ambiente_app, professor_e_orientador
+    from domain.feedback_aluno import feedback_ativo_professores
 
-    itens_avaliacoes: list[ItemMenu] = []
-    if professor_e_orientador(usuario):
-        itens_avaliacoes.append(ItemMenu(ROTA_ORDEM_APRESENTACAO, "Ordem de apresentação"))
-    itens_avaliacoes.append(ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"))
-    if professor_e_orientador(usuario) or modo_coordenador:
-        itens_avaliacoes.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
-        itens_avaliacoes.append(ItemMenu(ROTA_DOSSIE_ALUNO, "Dossiê do aluno"))
-        from domain.feedback_aluno import feedback_ativo_professores
+    orientador = professor_e_orientador(usuario)
+    acompanha = orientador or modo_coordenador
 
+    banca: list[ItemMenu] = []
+    if orientador:
+        banca.append(ItemMenu(ROTA_ORDEM_APRESENTACAO, "Ordem de apresentação"))
+    banca.append(ItemMenu(ROTA_LANCAR_BANCA, "Lançar notas da banca"))
+
+    alunos: list[ItemMenu] = []
+    if acompanha:
+        alunos.append(ItemMenu(ROTA_ANOTACOES_DAILY, "Anotações da daily"))
+        alunos.append(ItemMenu(ROTA_DOSSIE_ALUNO, "Dossiê do aluno"))
         if feedback_ativo_professores():
-            itens_avaliacoes.append(ItemMenu(ROTA_FEEDBACK_PROF, "Feedback aos alunos"))
-        itens_avaliacoes.append(
-            ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso")
-        )
-    itens_avaliacoes.extend(
-        [
-            ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
-            ItemMenu(ROTA_PARES_ACOMP, "Avaliação de pares"),
-            ItemMenu(ROTA_MODERACAO, "Moderação de comentários"),
-        ]
-    )
-    if professor_e_orientador(usuario):
-        itens_avaliacoes.append(_item_liberacao_notas())
-        itens_avaliacoes.append(_item_indicacao_grupo())
+            alunos.append(ItemMenu(ROTA_FEEDBACK_PROF, "Feedback aos alunos"))
+    if pode_gerenciar_indicacao_grupo(usuario):
+        alunos.append(_item_indicacao_grupo())
 
-    itens_integracoes = [ItemMenu(ROTA_IMPORT_CANVAS, "Importar Canvas")]
+    notas: list[ItemMenu] = [
+        ItemMenu(ROTA_ORIENTADOR, "Avaliação do orientador"),
+        ItemMenu(ROTA_PARES_ACOMP, "Avaliação de pares"),
+        ItemMenu(ROTA_MODERACAO, "Moderação de comentários"),
+    ]
     if pode_gerenciar_liberacao_notas(usuario):
-        itens_integracoes.append(ItemMenu(ROTA_NOTAS_ATIVIDADES, "Notas das atividades"))
+        notas.append(ItemMenu(ROTA_NOTAS_ATIVIDADES, "Notas das atividades"))
+        notas.append(_item_liberacao_notas())
+    if acompanha:
+        notas.append(ItemMenu(ROTA_DASHBOARD_CURSO, "Dashboard avaliação do curso"))
 
-    secoes: list[SecaoMenu] = [
-        SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),)),
-        SecaoMenu("Avaliações do ciclo", tuple(itens_avaliacoes)),
+    secoes: list[SecaoMenu] = [SecaoMenu(None, (ItemMenu(ROTA_FREQ_PROGRAMACAO, "Calendário"),))]
+    if modo_coordenador:
+        coordenacao = [
+            ItemMenu(ROTA_COORD_CONFIG, "Janela de avaliação da banca"),
+            ItemMenu(ROTA_COORD_PLANEJAMENTO, "Planejamento acadêmico"),
+            ItemMenu(ROTA_COORD_CONFERIR, "Conferir notas grupos"),
+        ]
+        cadastros = [
+            ItemMenu(ROTA_COORD_DISCIPLINAS, "Cadastro de disciplinas"),
+            ItemMenu(ROTA_COORD_CICLOS, "Cadastro de ciclos"),
+            ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
+            ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
+        ]
+        if ambiente_app() == "teste":
+            coordenacao.insert(2, ItemMenu(ROTA_FORMACAO_GRUPOS, "Formação de grupos"))
+            cadastros += [
+                ItemMenu(ROTA_ALUNOS_FICHA, "Ficha de alunos"),
+                ItemMenu(ROTA_MATRICULAS_OFERTA, "Matrículas na oferta"),
+            ]
+        secoes += [SecaoMenu("Coordenação", tuple(coordenacao)), SecaoMenu("Cadastros", tuple(cadastros))]
+    secoes.append(SecaoMenu("Banca", tuple(banca)))
+    if alunos:
+        secoes.append(SecaoMenu("Acompanhamento dos alunos", tuple(alunos)))
+    secoes += [
+        SecaoMenu("Avaliações e notas", tuple(notas)),
         SecaoMenu(
             "Presença",
             (
@@ -231,35 +253,8 @@ def _secoes_professor_orientador(usuario: dict, modo_coordenador: bool) -> list[
                 ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"),
             ),
         ),
-        SecaoMenu("Integrações", tuple(itens_integracoes)),
+        SecaoMenu("Integrações", (ItemMenu(ROTA_IMPORT_CANVAS, "Importar Canvas"),)),
     ]
-    if modo_coordenador:
-        itens_coord: list[ItemMenu] = [
-            ItemMenu(ROTA_COORD_CONFIG, "Janela de avaliação da banca"),
-            ItemMenu(ROTA_COORD_PLANEJAMENTO, "Planejamento acadêmico"),
-            ItemMenu(ROTA_COORD_DISCIPLINAS, "Cadastro de disciplinas"),
-            ItemMenu(ROTA_COORD_CICLOS, "Cadastro de ciclos"),
-            ItemMenu(ROTA_COORD_PROFESSORES, "Cadastro de professores"),
-            ItemMenu(ROTA_COORD_COMPONENTES, "Componentes da disciplina"),
-            ItemMenu(ROTA_COORD_CONFERIR, "Conferir notas grupos"),
-        ]
-        from auth.supabase_auth import ambiente_app
-
-        if ambiente_app() == "teste":
-            itens_coord[1:1] = [
-                ItemMenu(ROTA_ALUNOS_FICHA, "Ficha de alunos"),
-                ItemMenu(ROTA_FORMACAO_GRUPOS, "Formação de grupos"),
-                ItemMenu(ROTA_MATRICULAS_OFERTA, "Matrículas na oferta"),
-            ]
-        if not professor_e_orientador(usuario):
-            itens_coord.append(ItemMenu(ROTA_FREQ_DAILIES_PROF, "Controle de dailies"))
-            itens_coord.append(ItemMenu(ROTA_FREQ_ENCONTRO, "Presença no encontro presencial"))
-            itens_coord.append(_item_liberacao_notas())
-            itens_coord.append(_item_indicacao_grupo())
-        secoes.insert(
-            0,
-            SecaoMenu("Coordenação", tuple(itens_coord)),
-        )
     return secoes
 
 

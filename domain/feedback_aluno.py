@@ -48,8 +48,8 @@ CICLO_MIN_ACUMULADO = 2
 _PRIORIDADE = ("Pct_Aulas", "pares_nao_enviada", "Atividades_Media", "Pct_Dailies", "Pares_Media", "Orientador", "Banca")
 
 
-def _flag(nome: str) -> bool:
-    """Ligada no teste; em produção só com ``<nome> = true`` nos secrets."""
+def _flag(nome: str, padrao: bool | None = None) -> bool:
+    """Sem o secret, vale ``padrao``; sem padrão, ligada só no teste."""
     from auth.supabase_auth import ambiente_app
 
     try:
@@ -57,7 +57,7 @@ def _flag(nome: str) -> bool:
     except Exception:
         valor = None
     if valor is None:
-        return ambiente_app() == "teste"
+        return ambiente_app() == "teste" if padrao is None else padrao
     return str(valor).strip().lower() in {"true", "1", "sim", "yes"}
 
 
@@ -67,8 +67,8 @@ def feedback_ativo_alunos() -> bool:
 
 
 def feedback_ativo_professores() -> bool:
-    """Docentes preparam e publicam (``feedback_prof_ativo``); ligado também quando os alunos já veem."""
-    return _flag("feedback_prof_ativo") or feedback_ativo_alunos()
+    """Docentes preparam e publicam; ligado por padrão, desliga com ``feedback_prof_ativo = false``."""
+    return _flag("feedback_prof_ativo", padrao=True) or feedback_ativo_alunos()
 
 
 def _valor(linha, chave):

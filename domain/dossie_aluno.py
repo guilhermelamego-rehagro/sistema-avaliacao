@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 import streamlit as st
@@ -23,17 +23,21 @@ from utils.ordenacao import chave_ordenacao_grupo, chave_ordenacao_texto, ordena
 LIMIAR_PRESENCA = 75.0
 
 CITA_SIM = "sim"
+CITA_PROVAVEL = "provável"
 CITA_AMBIGUA = "ambígua"
 CITA_NAO = "não"
+CITA_CONFERIR = (CITA_PROVAVEL, CITA_AMBIGUA)
 
 _RE_COMENTARIO_AUTOMATICO = re.compile(r"(lancamento|conferencia) coordenador")
 # Em produção não há matrícula no Supabase: inativos ficam em salas próprias da Entrância.
 _RE_SALA_INATIVA = re.compile(r"inativ|desist|trancad|cancel|evadid")
 
+_SUFIXOS = {"jr", "junior", "filho", "filha", "neto", "neta", "sobrinho", "sobrinha"}
 _PARTICULAS = {
     "de", "da", "do", "das", "dos", "e", "di", "du", "del", "della", "van", "von",
-    "jr", "junior", "filho", "filha", "neto", "neta", "sobrinho",
-}
+} | _SUFIXOS
+# Palavras curtas demais geram falso positivo com erro de digitação (ex.: Bruno/bruto).
+_MIN_APROXIMADO = 6
 
 
 # --- Citação do aluno nas anotações de daily (feitas por grupo) ---
@@ -44,44 +48,107 @@ def _sem_acento(texto) -> str:
     return "".join(c for c in base if not unicodedata.combining(c)).lower()
 
 
+def _palavras(texto) -> list[str]:
+    """Sem acento e sem letra dobrada: Kéffelin, Kefellin e Kéfelin viram "kefelin"."""
+    return [re.sub(r"(.)\1+", r"\1", p) for p in re.findall(r"[a-z]+", _sem_acento(texto))]
+
+
 def _tokens_nome(nome) -> list[str]:
-    return [
-        t for t in re.findall(r"[a-z]+", _sem_acento(nome)) if len(t) >= 3 and t not in _PARTICULAS
-    ]
+    return [t for t in _palavras(nome) if len(t) >= 3 and t not in _PARTICULAS]
 
 
-def tokens_identificadores(nomes: dict[str, str]) -> dict[str, tuple[set[str], str]]:
-    """Por aluno do grupo: partes do nome que só ele tem no grupo, e o primeiro nome."""
+@dataclass(frozen=True)
+class Identificador:
+    unicos: frozenset[str]
+    primeiro: str
+    compostos: frozenset[str]
+    outros: frozenset[str]
+    # "João Neto" identifica outro João do grupo: não torna ambígua a menção a este João.
+    xaras: frozenset[str] = frozenset()
+
+
+def tokens_identificadores(nomes: dict[str, str]) -> dict[str, Identificador]:
+    """Por aluno do grupo: partes do nome que só ele tem, primeiro nome e "primeiro + sufixo" (João Neto)."""
     tokens = {email: _tokens_nome(nome) for email, nome in nomes.items()}
-    contagem = Counter(t for lista in tokens.values() for t in set(lista))
-    return {
-        email: ({t for t in lista if contagem[t] == 1}, lista[0] if lista else "")
+    compostos = {
+        email: {f"{lista[0]} {s}" for s in _palavras(nomes[email]) if s in _SUFIXOS} if lista else set()
         for email, lista in tokens.items()
     }
+    contagem = Counter(t for lista in tokens.values() for t in set(lista))
+    contagem_comp = Counter(c for itens in compostos.values() for c in itens)
+    todos = frozenset(contagem)
+    ids = {
+        email: Identificador(
+            unicos=frozenset(t for t in lista if contagem[t] == 1),
+            primeiro=lista[0] if lista else "",
+            compostos=frozenset(c for c in compostos[email] if contagem_comp[c] == 1),
+            outros=todos - set(lista),
+        )
+        for email, lista in tokens.items()
+    }
+    for email, ident in ids.items():
+        xaras = {
+            c
+            for outro, o in ids.items()
+            if outro != email and ident.primeiro and o.primeiro == ident.primeiro
+            for c in o.compostos | {f"{o.primeiro} {t}" for t in o.unicos}
+        }
+        ids[email] = replace(ident, xaras=frozenset(xaras))
+    return ids
 
 
-def _contem(texto_norm: str, token: str) -> bool:
-    return bool(token) and re.search(rf"\b{re.escape(token)}\b", texto_norm) is not None
+IDENTIFICADOR_VAZIO = Identificador(frozenset(), "", frozenset(), frozenset())
 
 
-def citacao(texto, identificadores: tuple[set[str], str]) -> str:
-    """Primeiro nome repetido no grupo, sem outra parte do nome, conta como ambígua."""
-    unicos, primeiro = identificadores
-    norm = _sem_acento(texto)
-    if any(_contem(norm, t) for t in unicos):
+def _uma_edicao(a: str, b: str) -> bool:
+    """Diferem por no máximo uma letra trocada, sobrando ou faltando."""
+    if a == b:
+        return True
+    if abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) > len(b):
+        a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]:
+        i += 1
+    return a[i + 1:] == b[i + 1:] if len(a) == len(b) else a[i:] == b[i + 1:]
+
+
+def citacao(texto, ident: Identificador) -> str:
+    """Sim: parte única do nome. Provável: grafia parecida. Ambígua: só o primeiro nome, repetido no grupo."""
+    palavras = _palavras(texto)
+    conjunto = set(palavras)
+    junto = f" {' '.join(palavras)} "
+    if ident.unicos & conjunto or any(f" {c} " in junto for c in ident.compostos):
         return CITA_SIM
-    if _contem(norm, primeiro):
+    alvos = [t for t in ident.unicos if len(t) >= _MIN_APROXIMADO]
+    if any(
+        _uma_edicao(p, t)
+        for p in conjunto
+        if len(p) >= _MIN_APROXIMADO - 1 and p not in ident.outros
+        for t in alvos
+    ):
+        return CITA_PROVAVEL
+    for c in ident.xaras:
+        junto = re.sub(rf"\b{c}\b", " ", junto)
+    if ident.primeiro and f" {ident.primeiro} " in junto:
         return CITA_AMBIGUA
     return CITA_NAO
 
 
-def trechos_citacao(texto, identificadores: tuple[set[str], str], limite: int = 300) -> list[str]:
-    unicos, primeiro = identificadores
-    alvos = unicos | ({primeiro} if primeiro else set())
+def rotulo_citacao(cit: str, primeiro: str) -> str:
+    return {
+        CITA_SIM: f"cita {primeiro}",
+        CITA_PROVAVEL: f"provavelmente cita {primeiro} — grafia diferente do cadastro",
+        CITA_AMBIGUA: f"talvez cite {primeiro} — primeiro nome repetido no grupo",
+    }.get(cit, "")
+
+
+def trechos_citacao(texto, ident: Identificador, limite: int = 300) -> list[str]:
     saida = []
     for frase in re.split(r"(?<=[.!?;])\s+|\n+", str(texto or "")):
         frase = frase.strip()
-        if frase and any(_contem(_sem_acento(frase), t) for t in alvos):
+        if frase and citacao(frase, ident) != CITA_NAO:
             saida.append(frase if len(frase) <= limite else frase[:limite].rstrip() + "…")
     return saida
 
@@ -230,7 +297,7 @@ def carregar_contexto(id_disciplina: str, ciclo: pd.Series, *, usuario: dict) ->
     anot = carregar_anotacoes(usuario=usuario)
     if not anot.empty:
         anot = anot[anot["ID_Disciplina"] == id_d].copy()
-        anot["_data"] = parse_data_planilha_series(anot["Data"]).dt.normalize()
+        anot["_data"] = pd.to_datetime(parse_data_planilha_series(anot["Data"]), errors="coerce").dt.normalize()
         do_ciclo = anot["ID_Ciclo"] == id_c
         if inicio is not None or fim is not None:
             do_ciclo |= _no_periodo(anot["_data"], inicio, fim)
@@ -381,7 +448,7 @@ def resumo_alunos(ctx: ContextoCiclo) -> pd.DataFrame:
                     "Atividades_Sem_Nota": max(n_ativ - len(notas_ativ), 0),
                     "Dailies_Anotadas": len(cits),
                     "Dailies_Citado": sum(c["citacao"] == CITA_SIM for c in cits),
-                    "Dailies_Ambiguas": sum(c["citacao"] == CITA_AMBIGUA for c in cits),
+                    "Dailies_Ambiguas": sum(c["citacao"] in CITA_CONFERIR for c in cits),
                 }
             )
     return _ordenar_resumo(linhas)
@@ -651,7 +718,7 @@ def _dossie_ciclo(ctx: ContextoCiclo, resumo: pd.DataFrame, email: str) -> Dossi
 
     citacoes = _citacoes_grupo(ctx, sala, grupo).get(email, [])
     membros = _membros(ctx, sala, grupo)
-    ident = tokens_identificadores(dict(zip(membros["Email"], membros["Nome"]))).get(email, (set(), ""))
+    ident = tokens_identificadores(dict(zip(membros["Email"], membros["Nome"]))).get(email, IDENTIFICADOR_VAZIO)
     banca = ctx.banca.get((sala, grupo))
     if banca:
         banca = {
@@ -759,7 +826,7 @@ def _sinais(d: Dossie) -> None:
     if linhas:
         linha = pd.concat(linhas, ignore_index=True)
         anotadas_presente = linha[(linha["Anotação do grupo"] == "Sim") & (linha["Presença"] == "Presente")]
-        citou = anotadas_presente["Citado(a)"].isin([CITA_SIM.capitalize(), CITA_AMBIGUA.capitalize()]).sum()
+        citou = anotadas_presente["Citado(a)"].isin([c.capitalize() for c in (CITA_SIM, *CITA_CONFERIR)]).sum()
         if len(anotadas_presente) >= 2 and citou == 0:
             d.atencao.append(
                 f"Presente em {len(anotadas_presente)} dailies anotadas, mas não aparece citado(a) nas anotações."
@@ -852,21 +919,22 @@ def _texto_ciclo(d: Dossie, c: DossieCiclo) -> list[str]:
         if c.banca.get("comentarios"):
             l.append("Comentários da banca ao grupo:")
             for com in c.banca["comentarios"]:
-                marca = f"(cita {d.primeiro_nome}) " if com["citacao"] != CITA_NAO else ""
+                rotulo = rotulo_citacao(com["citacao"], d.primeiro_nome)
+                marca = f"({rotulo}) " if rotulo else ""
                 l.append(f'- {marca}"{com["texto"]}"')
 
     linha = c.linha_dailies
     anotadas = linha[linha["Anotação do grupo"] == "Sim"] if not linha.empty else linha
     if not anotadas.empty:
-        citadas = anotadas[anotadas["Citado(a)"] != CITA_NAO.capitalize()]
-        l.append(f"Anotações de daily do grupo: {len(anotadas)}; cita {d.primeiro_nome} em {len(citadas)}.")
-        for _, row in citadas.iterrows():
-            obs = " (nome repetido no grupo, conferir)" if row["Citado(a)"] == CITA_AMBIGUA.capitalize() else ""
-            l.append(f'- {row["Data"]}{obs}: "{row["Trecho"]}"')
-        sem = anotadas[anotadas["Citado(a)"] == CITA_NAO.capitalize()]
-        if not sem.empty:
-            itens = ", ".join(f"{r['Data']} ({r['Presença'].lower()})" for _, r in sem.iterrows())
-            l.append(f"Anotações que não citam {d.primeiro_nome}: {itens}")
+        citadas = (anotadas["Citado(a)"] == CITA_SIM.capitalize()).sum()
+        l.append(
+            f"Anotações de daily do grupo (texto completo; {len(anotadas)} no total, "
+            f"citam {d.primeiro_nome} pelo nome cadastrado em {citadas}):"
+        )
+        for _, row in anotadas.iterrows():
+            rotulo = rotulo_citacao(row["Citado(a)"].lower(), d.primeiro_nome) or "sem citação pelo nome cadastrado"
+            presenca = row["Presença"].lower() if row["Presença"] != "—" else "presença não apurada"
+            l.append(f'- {row["Data"]} ({presenca}; {rotulo}): "{row["Anotação completa"]}"')
 
     t = c.atividades
     if not t.empty:
@@ -1066,6 +1134,9 @@ def prompt_feedback(d: Dossie) -> str:
         "Use só as informações do dossiê. Não invente fatos, números nem situações.",
         "Dado ausente não é falha do aluno: pode ser que não tenha sido registrado. Coloque na seção 6.",
         f"Comentários da banca e anotações de daily são sobre o grupo; só atribua algo a {nome} quando o trecho o citar.",
+        f"Os textos foram digitados por professores: o nome de {nome} pode aparecer com grafia diferente, "
+        "abreviado (ex.: só primeiro nome e último sobrenome) ou por apelido. Leia todos os textos e considere "
+        "essas menções; quando não tiver certeza de que é a mesma pessoa, coloque na seção 6.",
         "Não ser citado numa anotação de daily não significa participação ruim; trate como algo a confirmar.",
         "Escalas: pares de 0 a 5, orientador e banca de 0 a 10, atividades de 0 a 100. Diferenças pequenas "
         "(até 0,3 nos pares ou 0,5 no orientador) não são relevantes.",

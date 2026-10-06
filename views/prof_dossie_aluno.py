@@ -17,7 +17,6 @@ from domain.anotacoes_daily import AVISO_USO_INTERNO
 from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import indice_ciclo_academico_padrao, ordenar_ciclos
 from domain.dossie_aluno import (
-    CITA_NAO,
     INDICADORES,
     Dossie,
     DossieCiclo,
@@ -29,6 +28,7 @@ from domain.dossie_aluno import (
     montar_dossie,
     prompt_feedback,
     resumo_alunos,
+    rotulo_citacao,
     salas_comparacao_padrao,
     titulo_ciclos,
 )
@@ -273,7 +273,8 @@ def _render_banca(c: DossieCiclo, d: Dossie):
     st.markdown("**Comentários ao grupo**")
     if c.banca.get("comentarios"):
         for com in c.banca["comentarios"]:
-            marca = f"**Cita {d.primeiro_nome}** · " if com["citacao"] != CITA_NAO else ""
+            rotulo = rotulo_citacao(com["citacao"], d.primeiro_nome)
+            marca = f"**{rotulo[0].upper()}{rotulo[1:]}** · " if rotulo else ""
             st.info(f"{marca}“{com['texto']}” — {com['avaliador']}")
     else:
         st.caption("Sem comentários da banca.")
@@ -379,9 +380,10 @@ def _render_dossie(d: Dossie):
     abas = st.tabs(["Dailies", "Pares", "Banca", "Atividades", "Presença", "Feedback com IA"])
     with abas[0]:
         st.caption(
-            "As anotações são feitas por grupo. O sistema procura o nome e o sobrenome do aluno no texto "
-            "(apelidos não são reconhecidos). **Ambígua** = só o primeiro nome aparece e ele se repete "
-            "no grupo — confira o trecho."
+            "As anotações são feitas por grupo. O sistema procura o nome e o sobrenome do aluno no texto, "
+            "tolerando acento e letra dobrada ou trocada (apelidos não são reconhecidos). **Provável** = grafia "
+            "parecida com o cadastro; **Ambígua** = só o primeiro nome aparece e ele se repete no grupo — "
+            "confira o trecho. O prompt do Gemini leva todas as anotações do grupo, citando ou não."
         )
         _por_ciclo(d, _render_dailies)
     with abas[1]:

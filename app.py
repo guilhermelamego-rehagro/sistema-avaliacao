@@ -99,6 +99,8 @@ try:
 except ImportError:
     ROTA_NOTAS_ATIVIDADES = "notas_atividades"
 
+from navigation import ROTA_RELATORIO_SECRETARIA
+
 try:
     from navigation import ROTA_DOSSIE_ALUNO  # type: ignore
 except ImportError:
@@ -1431,6 +1433,11 @@ else:
         or perfil == "Secretaria"
     ):
         prof_matriculas_oferta.render(aluno)
+
+    elif menu == ROTA_RELATORIO_SECRETARIA and perfil == "Secretaria":
+        from views import sec_relatorio_notas
+
+        sec_relatorio_notas.render(aluno)
 
     elif menu == ROTA_COORD_CICLOS and perfil == "Professor" and usuario_e_coordenador(aluno) and st.session_state.get("modo_coordenador"):
         prof_cadastros.render_ciclos(aluno)

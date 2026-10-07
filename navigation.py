@@ -55,6 +55,9 @@ ROTA_FORMACAO_GRUPOS = "formacao_grupos"
 ROTA_MATRICULAS_OFERTA = "matriculas_oferta"
 ROTA_FREQ_ENCONTRO = "freq_encontro"
 
+# Secretaria
+ROTA_RELATORIO_SECRETARIA = "relatorio_secretaria"
+
 ROTAS_LAYOUT_LARGO = frozenset(
     {
         ROTA_FREQ_CONTROLE,
@@ -81,6 +84,7 @@ ROTAS_LAYOUT_LARGO = frozenset(
         ROTA_INDICACAO_GRUPO,
         ROTA_LIBERAR_NOTAS,
         ROTA_NOTAS_ATIVIDADES,
+        ROTA_RELATORIO_SECRETARIA,
     }
 )
 
@@ -292,6 +296,7 @@ def _secoes_secretaria() -> list[SecaoMenu]:
             ),
         )
     )
+    secoes.append(SecaoMenu("Notas", (ItemMenu(ROTA_RELATORIO_SECRETARIA, "Relatório de notas finais"),)))
     return secoes
 
 

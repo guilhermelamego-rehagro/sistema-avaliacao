@@ -358,7 +358,7 @@ def preparar_exportacao_boletins(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     out = df.copy()
-    texto = {"Nome", "Turma", "Grupo", "Sala", "Status"}
+    texto = {"Email", "Nome", "Turma", "Grupo", "Sala", "Status"}
     for col in out.columns:
         if col in texto:
             out[col] = (
@@ -389,7 +389,7 @@ def _sigla_componente(nome: str) -> str:
         return f"C{m.group(1)}"
     if re.search(r"(?i)entrega", n):
         return "EF"
-    if re.search(r"(?i)reuni[aã]o|daily", n):
+    if re.search(r"(?i)reuni|daily", n):
         return "Daily"
     if re.search(r"(?i)atividad", n):
         return "Ativ"
@@ -519,6 +519,7 @@ def montar_painel_boletins_disciplina(id_disciplina: str) -> pd.DataFrame:
         status = status_academico(pct, nota_final)
 
         linha: dict = {
+            "Email": email_l,
             "Nome": nome,
             "Turma": turma,
             "Grupo": grupo,

@@ -96,41 +96,94 @@ def _contagem(presentes, total) -> str:
     return f"{int(presentes)} de {int(total)}"
 
 
+_REGRA_FREQUENCIA = "Abaixo de 75% de presença na disciplina há reprovação por frequência."
+
+# Sujeito das frases de nota (todos femininos: "... subiu neste ciclo").
+_SUJEITO_NOTA = {
+    "Pares_Media": "A avaliação dos colegas",
+    "Orientador": "A avaliação da orientadora",
+    "Banca": "A nota do grupo na banca",
+    "Atividades_Media": "Sua média nas atividades individuais",
+}
+
+
+@dataclass(frozen=True)
+class _Disciplina:
+    """Acumulado da disciplina até o ciclo atual (``linha`` é a de ``combinar_resumos``)."""
+
+    linha: pd.Series
+    ciclos: str  # ex.: "Ciclos 1 a 3"
+
+
+def _aulas(linha) -> str:
+    return _contagem(linha["Aulas_Presentes"], linha["Aulas_Total"])
+
+
 def _frase_bem(chave: str, linha, texto: str) -> str:
     return {
-        "Pct_Aulas": f"Presença nas aulas: você participou de {_contagem(linha['Aulas_Presentes'], linha['Aulas_Total'])}.",
-        "Pct_Dailies": f"Participação nas dailies: {_contagem(linha['Dailies_Presentes'], linha['Dailies_Total'])}.",
-        "Pares_Media": f"Seus colegas avaliaram muito bem sua contribuição no grupo ({texto}).",
-        "Orientador": f"Ótima avaliação da sua orientadora ({texto}).",
-        "Banca": f"Seu grupo foi muito bem na banca ({texto}).",
-        "Atividades_Media": f"Atividades individuais com ótimo resultado ({texto}).",
+        "Pct_Aulas": f"Presença nas aulas: você esteve em {_aulas(linha)} aulas do ciclo.",
+        "Pct_Dailies": f"Participação nas dailies: {_contagem(linha['Dailies_Presentes'], linha['Dailies_Total'])} do ciclo.",
+        "Pares_Media": f"Seus colegas avaliaram muito bem sua contribuição no grupo neste ciclo ({texto}).",
+        "Orientador": f"Ótima avaliação da sua orientadora neste ciclo ({texto}).",
+        "Banca": f"Seu grupo foi muito bem na banca deste ciclo ({texto}).",
+        "Atividades_Media": f"Atividades individuais do ciclo com ótimo resultado ({texto}).",
     }[chave]
 
 
-def _frase_melhorar(chave: str, linha, texto: str) -> str:
+def _frase_melhorar(chave: str, linha, texto: str, disc: _Disciplina | None, texto_disc: str, faixa_disc) -> str:
     if chave == "Pct_Aulas":
-        return (
-            f"Você esteve em {_contagem(linha['Aulas_Presentes'], linha['Aulas_Total'])} aulas ({texto}). "
-            "Abaixo de 75% de presença há reprovação por frequência."
-        )
+        frase = f"Você esteve em {_aulas(linha)} aulas do ciclo ({texto})."
+        if disc and faixa_disc == ATENCAO:
+            frase += f" Somando os {disc.ciclos}, são {_aulas(disc.linha)} aulas na disciplina ({texto_disc})."
+        elif disc and faixa_disc:
+            frase += f" Na disciplina, somando os {disc.ciclos}, sua presença ainda está em {texto_disc} ({_aulas(disc.linha)})."
+        return f"{frase} {_REGRA_FREQUENCIA}"
     if chave == "Pct_Dailies":
-        return (
-            f"Você participou de {_contagem(linha['Dailies_Presentes'], linha['Dailies_Total'])} dailies. "
-            "Elas são o momento de alinhar o trabalho com o grupo e com a orientadora."
-        )
+        frase = f"Você participou de {_contagem(linha['Dailies_Presentes'], linha['Dailies_Total'])} dailies do ciclo."
+        if disc and faixa_disc == ATENCAO:
+            frase += (
+                f" Somando os {disc.ciclos}, foram "
+                f"{_contagem(disc.linha['Dailies_Presentes'], disc.linha['Dailies_Total'])} ({texto_disc})."
+            )
+        return f"{frase} Elas são o momento de alinhar o trabalho com o grupo e com a orientadora."
+
+    frase = {
+        "Pares_Media": f"A avaliação dos colegas neste ciclo ficou em {texto}.",
+        "Orientador": f"A avaliação da orientadora neste ciclo ficou em {texto}.",
+        "Banca": f"O grupo ficou com {texto} na banca deste ciclo.",
+        "Atividades_Media": f"Sua média nas atividades individuais do ciclo ficou em {texto}.",
+    }[chave]
+    if disc and faixa_disc == ATENCAO:
+        frase += f" Na disciplina, a média também está em atenção ({texto_disc})."
+    elif disc and faixa_disc:
+        frase += f" Na disciplina, a média está em {texto_disc}: vale retomar o ritmo dos ciclos anteriores."
     if chave == "Pares_Media":
-        return f"A avaliação dos colegas ficou em {texto}. Leia os comentários em Resultados de pares."
-    if chave == "Orientador":
-        return f"A avaliação da orientadora ficou em {texto}."
-    if chave == "Banca":
-        return f"O grupo ficou com {texto} na banca. Releia os comentários da banca com o grupo."
-    sem_nota = int(linha.get("Atividades_Sem_Nota") or 0)
-    extra = f" Há {sem_nota} atividade(s) sem nota lançada." if sem_nota else ""
-    return f"Sua média nas atividades individuais ficou em {texto}.{extra}"
+        frase += " Leia os comentários em Resultados de pares."
+    elif chave == "Banca":
+        frase += " Releia os comentários da banca com o grupo."
+    elif chave == "Atividades_Media":
+        sem_nota = int(linha.get("Atividades_Sem_Nota") or 0)
+        if sem_nota:
+            frase += f" Há {sem_nota} atividade(s) sem nota lançada."
+    return frase
 
 
-def _proximo_passo(chave: str, final: bool) -> str:
+def _frase_aulas_disciplina(linha, valor, texto: str, disc: _Disciplina, valor_disc, texto_disc: str) -> str:
+    """Ciclo sem atenção, mas a presença somada da disciplina está abaixo de 75%."""
+    total_ciclo = int(linha.get("Aulas_Total") or 0)
+    if not total_ciclo:
+        inicio = f"Somando os {disc.ciclos}, você esteve"
+    elif valor is not None and valor_disc is not None and valor > valor_disc:
+        inicio = f"Sua presença melhorou no ciclo ({_aulas(linha)} aulas), mas, somando os {disc.ciclos}, você esteve"
+    else:
+        inicio = f"No ciclo você esteve em {_aulas(linha)} aulas ({texto}), mas, somando os {disc.ciclos}, você esteve"
+    return f"{inicio} em {_aulas(disc.linha)} aulas da disciplina ({texto_disc}). {_REGRA_FREQUENCIA}"
+
+
+def _proximo_passo(chave: str, final: bool, aulas_disciplina_atencao: bool = False) -> str:
     futuro = "nos próximos projetos" if final else "no próximo ciclo"
+    if chave == "Pct_Aulas" and aulas_disciplina_atencao and not final:
+        return "Priorize estar presente em todas as próximas aulas: sua presença na disciplina precisa ficar em 75% ou mais."
     return {
         "Pct_Aulas": f"Priorize estar presente em todas as aulas {futuro}.",
         "pares_nao_enviada": "Envie a avaliação de pares em todo ciclo: ela também compõe a sua nota.",
@@ -178,31 +231,40 @@ def montar_feedback(
     vira o segundo ponto da régua e alerta de frequência acumulada.
     """
     final = ciclo_entrega_final(nome_ciclo)
+    disc = _Disciplina(acumulado, titulo_ciclos(ciclos_acumulado or [])) if acumulado is not None else None
     metricas, bem, melhorar, atencao_chaves = [], [], [], []
+    aulas_disciplina_atencao = False
     for m in METRICAS:
         v, f = _valor_e_faixa(m, linha)
         texto = _texto_valor(m, v)
         item = {"chave": m.chave, "titulo": m.titulo, "valor": v, "maximo": m.maximo,
                 "cortes": list(m.cortes), "faixa": f, "texto": texto}
-        if acumulado is not None:
+        va, fa, texto_disc = None, None, ""
+        if disc:
             va, fa = _valor_e_faixa(m, acumulado)
-            item.update({"acumulado": va, "faixa_acumulado": fa, "texto_acumulado": _texto_valor(m, va)})
+            texto_disc = _texto_valor(m, va)
+            item.update({"acumulado": va, "faixa_acumulado": fa, "texto_acumulado": texto_disc})
         metricas.append(item)
-        if f == OTIMO:
-            bem.append(_frase_bem(m.chave, linha, texto))
-        elif f == ATENCAO:
-            melhorar.append(_frase_melhorar(m.chave, linha, texto))
-            atencao_chaves.append(m.chave)
 
-    if acumulado is not None and "Pct_Aulas" not in atencao_chaves:
-        va, fa = _valor_e_faixa(_POR_CHAVE["Pct_Aulas"], acumulado)
-        if fa == ATENCAO:
-            melhorar.append(
-                f"Somando os {titulo_ciclos(ciclos_acumulado or []).lower()}, você esteve em "
-                f"{_contagem(acumulado['Aulas_Presentes'], acumulado['Aulas_Total'])} aulas ({fmt_num(va, 0)}%). "
-                "A reprovação por frequência considera a presença abaixo de 75% no total."
+        if f == ATENCAO:
+            melhorar.append(_frase_melhorar(m.chave, linha, texto, disc, texto_disc, fa))
+            atencao_chaves.append(m.chave)
+            if m.chave == "Pct_Aulas":
+                aulas_disciplina_atencao = fa == ATENCAO
+        elif m.chave == "Pct_Aulas" and fa == ATENCAO:
+            melhorar.append(_frase_aulas_disciplina(linha, v, texto, disc, va, texto_disc))
+            atencao_chaves.append(m.chave)
+            aulas_disciplina_atencao = True
+        elif m.chave in _SUJEITO_NOTA and fa == ATENCAO and f in (BOM, OTIMO):
+            bem.append(
+                f"{_SUJEITO_NOTA[m.chave]} subiu neste ciclo ({texto}); na disciplina, a média está em "
+                f"{texto_disc} e pode chegar ao Bom mantendo esse ritmo."
             )
-            atencao_chaves.append("Pct_Aulas")
+        elif f == OTIMO:
+            frase = _frase_bem(m.chave, linha, texto)
+            if m.chave in _SUJEITO_NOTA and fa == OTIMO:
+                frase += f" A média na disciplina também está no Ótimo ({texto_disc})."
+            bem.append(frase)
 
     esperados = int(linha.get("Pares_Esperados") or 0)
     feitos = int(linha.get("Pares_Feitos") or 0)
@@ -215,7 +277,7 @@ def montar_feedback(
 
     principal = next((c for c in _PRIORIDADE if c in atencao_chaves), None)
     if principal:
-        proximo = _proximo_passo(principal, final)
+        proximo = _proximo_passo(principal, final, aulas_disciplina_atencao)
     else:
         boas = [(mm["valor"] / mm["maximo"], mm["titulo"]) for mm in metricas if mm["faixa"] == BOM]
         if boas:
@@ -227,7 +289,7 @@ def montar_feedback(
             )
         elif not any(mm["faixa"] for mm in metricas if not mm["chave"].startswith("Pct_")):
             proximo = (
-                "Sua presença está em dia. As notas do ciclo aparecem aqui quando forem lançadas."
+                "Sua presença no ciclo está em dia. As notas do ciclo aparecem aqui quando forem lançadas."
                 if any(mm["faixa"] for mm in metricas)
                 else "Ainda não há dados suficientes deste ciclo."
             )

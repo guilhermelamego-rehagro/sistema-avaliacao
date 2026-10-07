@@ -526,6 +526,10 @@ def titulo_ciclos(nomes: list[str]) -> str:
     numeros = [re.fullmatch(r"(?i)ciclo\s*(\S+)", n) for n in nomes]
     if all(numeros):
         itens = [m.group(1) for m in numeros]
+        if len(itens) >= 3 and all(i.isdigit() for i in itens):
+            nums = [int(i) for i in itens]
+            if nums == list(range(nums[0], nums[0] + len(nums))):
+                return f"Ciclos {nums[0]} a {nums[-1]}"
         return f"Ciclos {', '.join(itens[:-1])} e {itens[-1]}"
     return f"{', '.join(nomes[:-1])} e {nomes[-1]}"
 

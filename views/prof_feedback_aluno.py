@@ -156,7 +156,7 @@ def render(usuario: dict) -> None:
         for _, row in base.iterrows()
     }
     if com_acumulado:
-        st.caption(f"Os indicadores mostram o {ctx.nome_ciclo} e o acumulado dos {titulo_ciclos(nomes_acumulado)}.")
+        st.caption(f"Os indicadores mostram o {ctx.nome_ciclo} e a disciplina até agora ({titulo_ciclos(nomes_acumulado)}).")
 
     linhas = []
     for _, row in base.iterrows():

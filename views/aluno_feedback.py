@@ -58,7 +58,7 @@ def _regua(m: dict) -> str:
     rotulo = _rotulo(m["texto"], faixa, "sem nota neste ciclo" if m.get("faixa_acumulado") else "ainda sem nota")
     if tem_acumulado:
         rotulo += (
-            "<br><span style='font-size:0.8rem;color:#6b7280'>acumulado: "
+            "<br><span style='font-size:0.8rem;color:#6b7280'>na disciplina: "
             f"{_rotulo(m['texto_acumulado'], m.get('faixa_acumulado'))}</span>"
         )
     colorida = bool(faixa or m.get("faixa_acumulado"))
@@ -99,7 +99,7 @@ def render_painel(
             f"<span style='color:{_MARCADOR};font-size:1.3rem;vertical-align:-2px'>●</span> <b>{nome_ciclo}</b>"
             " &nbsp;&nbsp; "
             f"<span style='color:{_MARCADOR_ACUMULADO};opacity:0.75;font-size:1.1rem;vertical-align:-1px'>●</span> "
-            f"Acumulado: {escape(titulo_ciclos(acumulados))}</div>",
+            f"Disciplina até agora ({escape(titulo_ciclos(acumulados))})</div>",
             unsafe_allow_html=True,
         )
     else:
@@ -111,7 +111,7 @@ def render_painel(
     for i, m in enumerate(metricas):
         (col_a if i % 2 == 0 else col_b).markdown(_regua(m), unsafe_allow_html=True)
     st.caption(
-        "As faixas usam as referências do curso (presença mínima de 75% e nota de aprovação de 70%), "
+        "As faixas usam as referências do curso (presença mínima de 75% na disciplina e nota de aprovação de 70%), "
         "não a comparação com colegas."
     )
 

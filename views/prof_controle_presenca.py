@@ -587,29 +587,31 @@ def _render_ajuste(alunos: pd.DataFrame, matriz: pd.DataFrame, ajustes: pd.DataF
             for _, r in do_aluno.iterrows()
         }
 
-        marcar = st.multiselect(
-            "Aulas a marcar como presente",
-            options=list(rotulo_falta),
-            format_func=rotulo_falta.get,
-            placeholder="Nenhuma falta neste período" if not rotulo_falta else "Escolha as datas",
-            key=f"presenca_ajuste_marcar_{versao}_{email}",
-        )
-        desfazer = []
-        if rotulo_ajuste:
-            desfazer = st.multiselect(
-                "Desfazer ajuste (volta a valer o registro do Meet)",
-                options=list(rotulo_ajuste),
-                format_func=rotulo_ajuste.get,
-                placeholder="Escolha as datas",
-                key=f"presenca_ajuste_desfazer_{versao}_{email}",
+        with st.form(f"presenca_ajuste_form_{versao}_{email}", border=False):
+            marcar = st.multiselect(
+                "Aulas a marcar como presente",
+                options=list(rotulo_falta),
+                format_func=rotulo_falta.get,
+                placeholder="Nenhuma falta neste período" if not rotulo_falta else "Escolha as datas",
+                key=f"presenca_ajuste_marcar_{versao}_{email}",
             )
-        justificativa = st.text_area(
-            "Justificativa (obrigatória para marcar presença)",
-            key=f"presenca_ajuste_just_{versao}_{email}",
-            placeholder="Ex.: reconsideração aprovada pela coordenação em 07/10 (atestado).",
-        )
+            desfazer = []
+            if rotulo_ajuste:
+                desfazer = st.multiselect(
+                    "Desfazer ajuste (volta a valer o registro do Meet)",
+                    options=list(rotulo_ajuste),
+                    format_func=rotulo_ajuste.get,
+                    placeholder="Escolha as datas",
+                    key=f"presenca_ajuste_desfazer_{versao}_{email}",
+                )
+            justificativa = st.text_area(
+                "Justificativa (obrigatória para marcar presença)",
+                key=f"presenca_ajuste_just_{versao}_{email}",
+                placeholder="Ex.: reconsideração aprovada pela coordenação em 07/10 (atestado).",
+            )
+            salvar = st.form_submit_button("Salvar ajuste", type="primary")
 
-        if not st.button("Salvar ajuste", type="primary", key=f"presenca_ajuste_salvar_{versao}_{email}"):
+        if not salvar:
             return
         if not marcar and not desfazer:
             st.warning("Escolha ao menos uma aula para marcar ou desfazer.")

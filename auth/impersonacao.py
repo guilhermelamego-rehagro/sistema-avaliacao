@@ -136,7 +136,54 @@ def encerrar_impersonacao() -> None:
     st.session_state.pop("usuario_real", None)
 
 
+def pode_ver_como_secretaria(usuario: dict | None) -> bool:
+    return bool(usuario) and usuario.get("perfil") == "Professor" and usuario_e_coordenador(usuario)
+
+
+def esta_na_visao_secretaria() -> bool:
+    return bool(st.session_state.get("visao_secretaria"))
+
+
+def iniciar_visao_secretaria() -> None:
+    """Mesmo usuário com perfil Secretaria: o que for gravado fica no nome do coordenador."""
+    ator = st.session_state.get("usuario_logado")
+    if not pode_ver_como_secretaria(ator) or esta_impersonando() or esta_na_visao_secretaria():
+        return
+    from navigation import rota_padrao
+
+    st.session_state["visao_secretaria"] = {"modo_coordenador": bool(st.session_state.get("modo_coordenador"))}
+    st.session_state["usuario_real"] = dict(ator)
+    persona = {**ator, "perfil": "Secretaria", "tipo_professor": None}
+    st.session_state["usuario_logado"] = persona
+    st.session_state["escolha_menu"] = rota_padrao(persona, "Secretaria")
+    st.session_state["modo_coordenador"] = False
+    registrar_log(ator.get("email") or "", ator.get("nome") or "", "Visão da secretaria: entrou", dedupe=False)
+
+
+def encerrar_visao_secretaria() -> None:
+    estado = st.session_state.pop("visao_secretaria", None) or {}
+    real = st.session_state.pop("usuario_real", None)
+    if not real:
+        return
+    registrar_log(real.get("email") or "", real.get("nome") or "", "Visão da secretaria: saiu", dedupe=False)
+    from navigation import rota_padrao
+
+    st.session_state["usuario_logado"] = dict(real)
+    st.session_state["modo_coordenador"] = bool(estado.get("modo_coordenador"))
+    st.session_state["escolha_menu"] = rota_padrao(real, "Professor")
+
+
 def render_banner_impersonacao() -> None:
+    if esta_na_visao_secretaria():
+        c1, c2 = st.columns([4, 1])
+        c1.info(
+            "**Visão da secretaria** — você está vendo o portal como a secretaria. "
+            "O que for gravado aqui fica registrado no seu nome."
+        )
+        if c2.button("Sair da visão da secretaria", type="primary", width="stretch", key="btn_sair_visao_sec"):
+            encerrar_visao_secretaria()
+            st.rerun()
+        return
     if not esta_impersonando():
         return
     alvo = alvo_impersonacao() or {}
@@ -173,10 +220,25 @@ def render_seletor_sidebar(usuario_menu: dict) -> None:
             st.rerun()
         return
 
+    if esta_na_visao_secretaria():
+        st.sidebar.divider()
+        if st.sidebar.button("Sair da visão da secretaria", width="stretch", key="sidebar_sair_visao_sec"):
+            encerrar_visao_secretaria()
+            st.rerun()
+        return
+
     if not pode_impersonar(usuario_menu):
         return
 
     st.sidebar.divider()
+    if pode_ver_como_secretaria(usuario_menu) and st.sidebar.button(
+        "Ver como secretaria",
+        width="stretch",
+        key="visao_sec_go",
+        help="Abre o menu e as telas da secretaria com o seu usuário.",
+    ):
+        iniciar_visao_secretaria()
+        st.rerun()
     with st.sidebar.expander("Visualizar como aluno", expanded=False):
         st.caption(
             "Abre o portal na visão do aluno (somente leitura). "

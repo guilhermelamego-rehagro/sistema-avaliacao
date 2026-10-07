@@ -185,7 +185,7 @@ def render(usuario: dict):
         "Turma": st.column_config.TextColumn("Turma", width="small"),
         "Sala": st.column_config.TextColumn("Sala", width="small"),
         "Grupo": st.column_config.TextColumn("Grupo", width="small"),
-        "Final": st.column_config.NumberColumn("Final", format="%.1f", width="small"),
+        "Final": st.column_config.NumberColumn("Final", format="%.0f", width="small"),
         "Status": st.column_config.TextColumn("Status", width="medium"),
     }
     for col in mostrar.columns:

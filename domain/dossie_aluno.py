@@ -963,7 +963,7 @@ def _texto_situacao_final(r) -> list[str]:
         return []
     p = r.presenca
     presenca = f"; presença {fmt_pct(p['pct'])} no total da disciplina" if p["total"] else ""
-    l = [f"Situação final na disciplina: {r.situacao} — nota final {fmt_num(r.nota_final)}/100{presenca}."]
+    l = [f"Situação final na disciplina: {r.situacao} — nota final {fmt_num(r.nota_final, 0)}/100{presenca}."]
     if r.segunda_chamada:
         l.append("Em segunda chamada.")
     if r.motivos:

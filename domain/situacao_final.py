@@ -182,12 +182,12 @@ def _motivos(r: ResultadoFinal, faltas_ciclo: str) -> list[str]:
         if faltas_ciclo:
             motivos.append(f"Faltas por ciclo — {faltas_ciclo}.")
         if nota is not None and nota < NOTA_APROVACAO:
-            motivos.append(f"A nota final ({fmt_num(nota)}) também ficou abaixo de {fmt_num(NOTA_APROVACAO, 0)}.")
+            motivos.append(f"A nota final ({fmt_num(nota, 0)}) também ficou abaixo de {fmt_num(NOTA_APROVACAO, 0)}.")
 
     elif r.situacao in (REPROVADO_NOTA, RECUPERACAO):
-        texto = f"Nota final {fmt_num(nota)}: faltaram {fmt_num(NOTA_APROVACAO - nota)} pontos para a aprovação ({fmt_num(NOTA_APROVACAO, 0)})"
+        texto = f"Nota final {fmt_num(nota, 0)}: faltaram {fmt_num(NOTA_APROVACAO - nota, 0)} pontos para a aprovação ({fmt_num(NOTA_APROVACAO, 0)})"
         if r.situacao == REPROVADO_NOTA:
-            texto += f" e {fmt_num(NOTA_RECUPERACAO - nota)} para a recuperação ({fmt_num(NOTA_RECUPERACAO, 0)})"
+            texto += f" e {fmt_num(NOTA_RECUPERACAO - nota, 0)} para a recuperação ({fmt_num(NOTA_RECUPERACAO, 0)})"
         motivos.append(texto + ".")
         perdas = comp[comp["Perdeu"] >= 0.5].sort_values("Perdeu", ascending=False).head(3)
         for _, c in perdas.iterrows():
@@ -205,7 +205,7 @@ def _motivos(r: ResultadoFinal, faltas_ciclo: str) -> list[str]:
             motivos.append(f"Presença de {fmt_pct(p['pct'])} — acima do mínimo, mas com {p['faltas']} faltas.")
 
     elif r.situacao == APROVADO:
-        motivos.append(f"Nota final {fmt_num(nota)} (mínimo {fmt_num(NOTA_APROVACAO, 0)}) e presença de {fmt_pct(p['pct'])}.")
+        motivos.append(f"Nota final {fmt_num(nota, 0)} (mínimo {fmt_num(NOTA_APROVACAO, 0)}) e presença de {fmt_pct(p['pct'])}.")
         fortes = comp[comp["Nota"].notna()].sort_values("Pontos", ascending=False).head(2) if not comp.empty else comp
         for _, c in fortes.iterrows():
             motivos.append(

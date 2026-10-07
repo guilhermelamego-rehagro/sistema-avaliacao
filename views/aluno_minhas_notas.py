@@ -41,12 +41,13 @@ def render(usuario: dict):
     if liberado:
         nota_final = nota_final_boletim(df_boletim)
         if nota_final is not None:
-            st.metric("Nota final parcial da disciplina", f"{nota_final:.1f}")
+            st.metric("Nota final parcial da disciplina", f"{nota_final:.0f}")
         else:
             st.metric("Nota final parcial da disciplina", "Pendente")
         st.caption(
             "A nota final considera os pesos configurados pelo orientador(a) "
-            "para os componentes já avaliados."
+            "para os componentes já avaliados e é arredondada para o número inteiro mais próximo "
+            "(ex.: 69,5 vira 70)."
         )
     else:
         st.caption(

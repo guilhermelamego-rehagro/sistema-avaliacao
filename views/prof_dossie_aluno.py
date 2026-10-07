@@ -69,7 +69,7 @@ def _tabela_resumo(resumo: pd.DataFrame, resultados: dict | None = None) -> pd.D
         finais = {
             "Situação final": resumo["Email"].map(_situacao),
             "Nota final": resumo["Email"].map(
-                lambda e: fmt_num(resultados[e].nota_final) if e in resultados else "—"
+                lambda e: fmt_num(resultados[e].nota_final, 0) if e in resultados else "—"
             ),
         }
     return pd.DataFrame(
@@ -185,7 +185,7 @@ def _render_situacao_final(d: Dossie):
     caixa = {APROVADO: st.success, RECUPERACAO: st.warning, PENDENTE: st.info}.get(r.situacao, st.error)
     segunda = " · Segunda chamada" if r.segunda_chamada else ""
     caixa(
-        f"**Situação final: {r.situacao}{segunda}** — nota final {fmt_num(r.nota_final)}, "
+        f"**Situação final: {r.situacao}{segunda}** — nota final {fmt_num(r.nota_final, 0)}, "
         f"presença {fmt_pct(r.presenca['pct'])} no total da disciplina\n\n"
         + "\n".join(f"- {m}" for m in r.motivos)
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from decimal import ROUND_HALF_UP, Decimal
 
 import pandas as pd
 
@@ -268,13 +269,20 @@ def calcular_boletim_aluno(
     return df
 
 
+def arredondar_nota_final(valor: float) -> float:
+    """Inteiro mais próximo, com 0,5 para cima (69,5 → 70); ``round()`` levaria 68,5 → 68."""
+    exata = Decimal(str(round(float(valor), 2)))
+    return float(exata.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def nota_final_boletim(df_boletim: pd.DataFrame) -> float | None:
-    if df_boletim.empty or df_boletim["Contribuição"].isna().any():
-        contrib = df_boletim["Contribuição"].dropna()
-        if contrib.empty:
-            return None
-        return round(float(contrib.sum()), 2)
-    return round(float(df_boletim["Contribuição"].sum()), 2)
+    """Nota final (ou parcial) da disciplina, já arredondada para inteiro; vale também para a situação."""
+    if df_boletim.empty:
+        return None
+    contrib = df_boletim["Contribuição"].dropna()
+    if contrib.empty:
+        return None
+    return arredondar_nota_final(contrib.sum())
 
 
 def status_academico(

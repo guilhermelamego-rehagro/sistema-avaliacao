@@ -291,7 +291,7 @@ def render(usuario: dict):
                         "Data situação": h.get("data_situacao") or "",
                         "Grupo": h.get("grupo") or "—",
                         "Nota": (
-                            f"{h['nota_final']:.1f}"
+                            f"{h['nota_final']:.0f}"
                             if h.get("nota_final") is not None
                             else "—"
                         ),

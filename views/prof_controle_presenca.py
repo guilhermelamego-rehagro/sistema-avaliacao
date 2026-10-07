@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import io
+import math
 
 import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba
-from domain.presenca import carregar_base_presenca, compilar_grid_dailies, compilar_grid_frequencia
+from domain.presenca import (
+    ajustes_da_matriz,
+    carregar_base_presenca,
+    compilar_grid_dailies,
+    compilar_grid_de_matriz,
+    gravar_ajustes_presenca,
+    matriz_frequencia_turma,
+)
 from domain.cadastros import carregar_disciplinas
 from domain.filtros_operacionais import preparar_alunos_presenca
 from data.supabase_academico import academico_habilitado
@@ -191,14 +199,20 @@ def render(usuario: dict, tipo: str = "aulas"):
     with st.spinner("Compilando presença..."):
         memoria_cache = carregar_base_presenca()
         memoria_cache["entrancia"] = df_entrancia
+        matriz = pd.DataFrame()
+        ajustes = pd.DataFrame()
         if eh_dailies:
             df_resumo, df_raw = compilar_grid_dailies(
                 id_disciplina_sel, alunos_turma, memoria_cache
             )
         else:
-            df_resumo, df_raw = compilar_grid_frequencia(
-                id_disciplina_sel, alunos_turma, memoria_cache
+            matriz = matriz_frequencia_turma(id_disciplina_sel, alunos_turma, memoria_cache)
+            df_resumo, df_raw = (
+                compilar_grid_de_matriz(matriz, alunos_turma)
+                if not matriz.empty
+                else (pd.DataFrame(), pd.DataFrame())
             )
+            ajustes = ajustes_da_matriz(matriz, memoria_cache)
 
     if df_raw.empty:
         st.info(
@@ -332,7 +346,8 @@ def render(usuario: dict, tipo: str = "aulas"):
         data_ref = pd.Timestamp(row_data["Data_Sort"]).normalize()
         rotulo = data_ref.strftime("%d/%m/%Y")
         mapa_datas[rotulo] = data_ref
-    data_falta = st.selectbox(
+    c8, c9 = st.columns([2, 1.4], vertical_alignment="bottom")
+    data_falta = c8.selectbox(
         "Faltantes em uma data:",
         [opcao_todas] + list(mapa_datas.keys()),
         key=f"presenca_data_falta_{tipo}",
@@ -340,6 +355,18 @@ def render(usuario: dict, tipo: str = "aulas"):
             "Lista só quem faltou na data escolhida. "
             "Conexão abaixo de 30 min conta como falta."
         ),
+    )
+    so_ajustes = (
+        not eh_dailies
+        and c9.checkbox(
+            "Só aulas com ajuste ✏️",
+            value=False,
+            key="presenca_so_ajustes",
+            help=(
+                "Mostra só os alunos e as datas com presença ajustada manualmente, "
+                "com a justificativa (útil para atualizar o Flex)."
+            ),
+        )
     )
 
     if turma_filtro:
@@ -370,9 +397,16 @@ def render(usuario: dict, tipo: str = "aulas"):
             & (df_dia["Status"].isin(["❌", "⏳"]))
         ]["Email_Cru"]
         df_final = df_final[df_final["Email_Cru"].isin(emails_faltaram)]
+    if so_ajustes:
+        emails_ajuste = set(ajustes["Email_Limpo"]) if not ajustes.empty else set()
+        df_final = df_final[
+            df_final["Email_Cru"].astype(str).str.strip().str.lower().isin(emails_ajuste)
+        ]
 
     if df_final.empty:
-        if data_falta != opcao_todas:
+        if so_ajustes:
+            aviso = "Nenhuma aula com presença ajustada nesta disciplina com os filtros atuais."
+        elif data_falta != opcao_todas:
             aviso = f"Nenhum aluno faltou em {data_falta} com os filtros atuais."
         elif filtro_seguidas:
             aviso = "Nenhum aluno com 2 ou mais faltas seguidas nesta modalidade."
@@ -404,19 +438,28 @@ def render(usuario: dict, tipo: str = "aulas"):
     else:
         df_final = df_final.sort_values("Nome")
 
+    alunos_visiveis = df_final[["Email_Cru", "Nome", "Turma", "Sala"]].copy()
+    lista_ajustes = _lista_ajustes(ajustes, alunos_visiveis) if so_ajustes else pd.DataFrame()
+
     df_final = df_final.set_index("Nome")
     cols_formas = ["Turma", "Sala", "Grupo"]
     for c in ("Status_Curso", "Situacao_Oferta", "Pendencia", "Gera_Presenca"):
         if c in df_final.columns:
             cols_formas.append(c)
     cols_formas += ["% Realizado", "% Projetado", "Faltas"]
-    cols_finais = cols_formas + [c for c in colunas_datas_ordenadas if c in df_final.columns]
+    datas_visiveis = colunas_datas_ordenadas
+    if so_ajustes:
+        com_ajuste = set(pd.to_datetime(lista_ajustes["Data"], dayfirst=True).dt.strftime("%d/%m"))
+        datas_visiveis = [c for c in colunas_datas_ordenadas if c in com_ajuste]
+    cols_finais = cols_formas + [c for c in datas_visiveis if c in df_final.columns]
     df_final = df_final[cols_finais]
 
     df_excel = df_final.copy().replace({"✅": "P", "❌": "F", "⏳": "C", "✏️": "A", "📅": "N"})
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
         df_excel.to_excel(writer, index=True, sheet_name="Dailies" if eh_dailies else "Frequencia")
+        if so_ajustes:
+            lista_ajustes.to_excel(writer, index=False, sheet_name="Ajustes")
 
     col_exp, _ = st.columns([1, 2])
     col_exp.download_button(
@@ -458,3 +501,148 @@ def render(usuario: dict, tipo: str = "aulas"):
         )
     st.caption(f"{len(df_final)} aluno(s) no filtro selecionado.")
     st.dataframe(df_final, width="stretch", column_config=config_colunas)
+
+    if so_ajustes:
+        st.markdown(f"**Aulas com presença ajustada** ({len(lista_ajustes)})")
+        st.dataframe(lista_ajustes, width="stretch", hide_index=True)
+    if not eh_dailies:
+        _render_ajuste(alunos_visiveis, matriz, ajustes, usuario)
+
+
+def _lista_ajustes(ajustes: pd.DataFrame, alunos: pd.DataFrame) -> pd.DataFrame:
+    """Uma linha por aluno × aula ajustada, só dos alunos visíveis."""
+    colunas = ["Aluno", "Turma", "Sala", "Data", "Novo status", "Justificativa", "Ajustado por", "Ajustado em"]
+    if ajustes.empty or alunos.empty:
+        return pd.DataFrame(columns=colunas)
+    alunos = alunos.assign(Email_Limpo=alunos["Email_Cru"].astype(str).str.strip().str.lower())
+    df = ajustes.merge(alunos, on="Email_Limpo", how="inner").sort_values(["Nome", "Data_Formatada"])
+    return pd.DataFrame(
+        {
+            "Aluno": df["Nome"],
+            "Turma": df["Turma"],
+            "Sala": df["Sala"],
+            "Data": df["Data_Str"],
+            "Novo status": df["Status_Aluno"],
+            "Justificativa": df["Justificativa"].fillna(""),
+            "Ajustado por": df["Ajustado_Por"].fillna(""),
+            "Ajustado em": df["Ajustado_Em"].fillna(""),
+        }
+    ).reset_index(drop=True)
+
+
+def _render_ajuste(alunos: pd.DataFrame, matriz: pd.DataFrame, ajustes: pd.DataFrame, usuario: dict) -> None:
+    msg = st.session_state.pop("presenca_ajuste_msg", None)
+    with st.expander("✏️ Ajustar presença de um aluno", expanded=bool(msg)):
+        if msg:
+            st.success(msg)
+        st.caption(
+            "Para reconsiderar faltas: a aula marcada como presente passa a contar no percentual "
+            "em todas as telas (situação final, notas, dossiê e feedback). "
+            "A lista de alunos segue os filtros acima."
+        )
+        versao = st.session_state.get("presenca_ajuste_v", 0)
+        nomes = dict(zip(alunos["Email_Cru"].astype(str).str.strip().str.lower(), alunos["Nome"]))
+        if st.session_state.get("presenca_ajuste_aluno") not in nomes:
+            st.session_state.pop("presenca_ajuste_aluno", None)
+        email = st.selectbox(
+            "Aluno",
+            options=sorted(nomes, key=lambda e: str(nomes[e])),
+            format_func=lambda e: nomes[e],
+            index=None,
+            placeholder="Escolha o aluno",
+            key="presenca_ajuste_aluno",
+        )
+        if not email:
+            return
+
+        m = matriz[matriz["Email_Limpo"] == email].sort_values("Data_Formatada")
+        vividas = m[~m["Status_Tecnico"].isin(["Futuro", "Erro"])]
+        futuras = int((m["Status_Tecnico"] == "Futuro").sum())
+        pres = int((vividas["Status_Aluno"] == "Presente").sum())
+        total = len(m)
+        if len(vividas):
+            st.markdown(
+                f"Presença até agora: **{pres} de {len(vividas)} aulas** "
+                f"({pres / len(vividas) * 100:.0f}%)."
+            )
+        faltam = max(math.ceil(0.75 * total - 1e-9) - pres - futuras, 0)
+        if total and faltam:
+            restam = f", mesmo indo às {futuras} aulas que restam" if futuras else ""
+            st.warning(f"Para chegar a 75% na disciplina{restam}, faltam **{faltam} presença(s)**.")
+        elif total and futuras:
+            st.caption("Com presença nas aulas que restam, a disciplina fica em 75% ou mais.")
+        elif total:
+            st.caption("Já está com 75% ou mais de presença na disciplina.")
+
+        faltas = vividas[vividas["Status_Aluno"] == "Falta"]
+        rotulo_falta = {
+            r["Data_Str"]: f"{r['Data_Str']} · "
+            + (f"conectado {int(r['Minutos'])} min" if r["Minutos"] > 0 else "falta")
+            for _, r in faltas.iterrows()
+        }
+        do_aluno = ajustes[ajustes["Email_Limpo"] == email] if not ajustes.empty else pd.DataFrame()
+        rotulo_ajuste = {
+            r["Data_Str"]: f"{r['Data_Str']} · {r['Status_Aluno']}"
+            + (f" ({r['Justificativa']})" if str(r.get("Justificativa") or "").strip() else "")
+            for _, r in do_aluno.iterrows()
+        }
+
+        marcar = st.multiselect(
+            "Aulas a marcar como presente",
+            options=list(rotulo_falta),
+            format_func=rotulo_falta.get,
+            placeholder="Nenhuma falta neste período" if not rotulo_falta else "Escolha as datas",
+            key=f"presenca_ajuste_marcar_{versao}_{email}",
+        )
+        desfazer = []
+        if rotulo_ajuste:
+            desfazer = st.multiselect(
+                "Desfazer ajuste (volta a valer o registro do Meet)",
+                options=list(rotulo_ajuste),
+                format_func=rotulo_ajuste.get,
+                placeholder="Escolha as datas",
+                key=f"presenca_ajuste_desfazer_{versao}_{email}",
+            )
+        justificativa = st.text_area(
+            "Justificativa (obrigatória para marcar presença)",
+            key=f"presenca_ajuste_just_{versao}_{email}",
+            placeholder="Ex.: reconsideração aprovada pela coordenação em 07/10 (atestado).",
+        )
+
+        if not st.button("Salvar ajuste", type="primary", key=f"presenca_ajuste_salvar_{versao}_{email}"):
+            return
+        if not marcar and not desfazer:
+            st.warning("Escolha ao menos uma aula para marcar ou desfazer.")
+            return
+        if marcar and not justificativa.strip():
+            st.warning("Escreva a justificativa do ajuste.")
+            return
+
+        por_data = m.drop_duplicates("Data_Str").set_index("Data_Str")
+        novos = [
+            {
+                "Data": data,
+                "Email_Aluno": email,
+                "Disciplina": por_data.at[data, "Disciplina"],
+                "Novo_Status": "Presente",
+                "Justificativa": justificativa.strip(),
+                "Aluno": nomes[email],
+            }
+            for data in marcar
+        ]
+        remover = [(email, data, por_data.at[data, "Disciplina"]) for data in desfazer]
+        try:
+            with st.spinner("Gravando na planilha de frequência..."):
+                gravar_ajustes_presenca(novos, remover, usuario)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Não foi possível gravar o ajuste: {exc}")
+            return
+
+        partes = []
+        if marcar:
+            partes.append(f"{len(marcar)} aula(s) marcada(s) como presente")
+        if desfazer:
+            partes.append(f"{len(desfazer)} ajuste(s) desfeito(s)")
+        st.session_state["presenca_ajuste_msg"] = f"{nomes[email]}: {' e '.join(partes)}."
+        st.session_state["presenca_ajuste_v"] = versao + 1
+        st.rerun()

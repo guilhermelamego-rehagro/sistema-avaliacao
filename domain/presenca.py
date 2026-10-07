@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from config import ICONE_STATUS_PRESENCA, MINUTOS_PRESENCA
-from data.sheets import ler_aba, ler_aba_frequencia
+from data.sheets import ler_aba, ler_aba_frequencia, salvar_aba_frequencia
 from domain.ciclos import hoje_normalizado
 from utils.datas import parse_data_planilha_series
 from utils.disciplina import mapa_codigo_disciplina_legado, normalizar_id, remapear_coluna_id_disciplina
@@ -336,7 +336,7 @@ def sequencia_faltas(status_aluno: pd.Series) -> tuple[int, int]:
     return atual_fim, max_seq
 
 
-def _compilar_grid_de_matriz(
+def compilar_grid_de_matriz(
     matriz: pd.DataFrame, alunos_turma: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     meta = alunos_turma.copy()
@@ -461,7 +461,95 @@ def compilar_grid_frequencia(
     matriz = matriz_frequencia_turma(id_disciplina, alunos_turma, dfs_cache)
     if matriz.empty:
         return pd.DataFrame(), pd.DataFrame()
-    return _compilar_grid_de_matriz(matriz, alunos_turma)
+    return compilar_grid_de_matriz(matriz, alunos_turma)
+
+
+COLUNAS_AJUSTE = [
+    "Data",
+    "Email_Aluno",
+    "Disciplina",
+    "Novo_Status",
+    "Justificativa",
+    "Aluno",
+    "Ajustado_Por",
+    "Ajustado_Em",
+]
+
+
+def _chave_ajuste(email, data, disciplina) -> tuple[str, str, str]:
+    data_ts = parse_data_planilha_series(pd.Series([data])).iloc[0]
+    data_str = "" if pd.isna(data_ts) else pd.Timestamp(data_ts).strftime("%d/%m/%Y")
+    return (
+        str(email or "").strip().lower(),
+        data_str,
+        str(disciplina or "").strip().lower(),
+    )
+
+
+def ajustes_da_matriz(matriz: pd.DataFrame, dfs_cache: dict) -> pd.DataFrame:
+    """Ajustes que valem em alguma aula da matriz (uma linha por aluno × aula ajustada)."""
+    if matriz.empty:
+        return pd.DataFrame()
+    bruto = dfs_cache["ajustes"].copy()
+    if bruto.empty or "Email_Aluno" not in bruto.columns:
+        return pd.DataFrame()
+    bruto.columns = [str(c).strip() for c in bruto.columns]
+    for col in COLUNAS_AJUSTE:
+        if col not in bruto.columns:
+            bruto[col] = ""
+    chaves = bruto.apply(
+        lambda r: _chave_ajuste(r["Email_Aluno"], r["Data"], r["Disciplina"]), axis=1
+    )
+    bruto["Email_Limpo"] = [c[0] for c in chaves]
+    bruto["Data_Str"] = [c[1] for c in chaves]
+    bruto["Chave_Disc"] = [c[2] for c in chaves]
+
+    aulas = matriz[matriz["Status_Tecnico"] == "Ajuste"][
+        ["Email_Limpo", "Data_Str", "Chave_Disc", "Data_Formatada", "Status_Aluno"]
+    ]
+    extras = ["Justificativa", "Ajustado_Por", "Ajustado_Em", "Disciplina"]
+    return aulas.merge(
+        bruto[["Email_Limpo", "Data_Str", "Chave_Disc"] + extras].drop_duplicates(
+            ["Email_Limpo", "Data_Str", "Chave_Disc"], keep="last"
+        ),
+        on=["Email_Limpo", "Data_Str", "Chave_Disc"],
+        how="left",
+    )
+
+
+def gravar_ajustes_presenca(
+    novos: list[dict], remover: list[tuple[str, str, str]], usuario: dict
+) -> None:
+    """Grava/substitui ajustes e remove os pedidos, lendo a aba atualizada antes de reescrever.
+
+    ``novos``: dicts com Data, Email_Aluno, Disciplina, Novo_Status, Justificativa, Aluno.
+    ``remover``: chaves (email, data dd/mm/aaaa, disciplina), comparadas sem caixa.
+    """
+    ler_aba_frequencia.clear()
+    df = ler_aba_frequencia("Ajustes_Presenca").copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    for col in COLUNAS_AJUSTE:
+        if col not in df.columns:
+            df[col] = ""
+    colunas = list(dict.fromkeys(COLUNAS_AJUSTE + list(df.columns)))
+
+    agora = pd.Timestamp.now(tz="America/Sao_Paulo").strftime("%d/%m/%Y %H:%M")
+    autor = str(usuario.get("nome") or usuario.get("email") or "").strip()
+    linhas_novas = [
+        {**item, "Ajustado_Por": autor, "Ajustado_Em": agora} for item in novos
+    ]
+    sair = {_chave_ajuste(*c) for c in remover}
+    sair |= {
+        _chave_ajuste(i["Email_Aluno"], i["Data"], i["Disciplina"]) for i in linhas_novas
+    }
+    if not df.empty and sair:
+        chaves = df.apply(
+            lambda r: _chave_ajuste(r["Email_Aluno"], r["Data"], r["Disciplina"]), axis=1
+        )
+        df = df[~chaves.map(lambda c: c in sair)]
+
+    out = pd.concat([df[colunas], pd.DataFrame(linhas_novas, columns=colunas)], ignore_index=True)
+    salvar_aba_frequencia("Ajustes_Presenca", out, colunas)
 
 
 def compilar_grid_dailies(
@@ -472,4 +560,4 @@ def compilar_grid_dailies(
     matriz = matriz_dailies_turma(id_disciplina, alunos_turma, dfs_cache)
     if matriz.empty:
         return pd.DataFrame(), pd.DataFrame()
-    return _compilar_grid_de_matriz(matriz, alunos_turma)
+    return compilar_grid_de_matriz(matriz, alunos_turma)

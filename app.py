@@ -99,7 +99,10 @@ try:
 except ImportError:
     ROTA_NOTAS_ATIVIDADES = "notas_atividades"
 
-from navigation import ROTA_RELATORIO_SECRETARIA
+try:
+    from navigation import ROTA_RELATORIO_SECRETARIA  # type: ignore
+except ImportError:
+    ROTA_RELATORIO_SECRETARIA = "relatorio_secretaria"
 
 try:
     from navigation import ROTA_DOSSIE_ALUNO  # type: ignore

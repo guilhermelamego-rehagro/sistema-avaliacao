@@ -9,12 +9,14 @@ import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba
+from domain.avaliacoes import formatar_nota_grid, parse_nota_orientador, salvar_avaliacao_orientador
 from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import hoje_normalizado, indice_ciclo_academico_padrao, ordenar_ciclos
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
 from domain.dossie_aluno import combinar_resumos, titulo_ciclos
 from domain.feedback_aluno import CICLO_MIN_ACUMULADO, feedback_ativo_alunos, montar_feedback
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
+from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 from views.aluno_feedback import render_painel
 from views.prof_dossie_aluno import _carregar_ciclos
@@ -40,6 +42,43 @@ def _linha_base(email: str, ctx, usuario: dict) -> dict:
         "autor_email": str(usuario.get("email", "")).lower(),
         "autor_nome": str(usuario.get("nome", "")),
     }
+
+
+def _fmt_nota_orientador(valor) -> str:
+    return "" if valor is None or pd.isna(valor) else formatar_nota_grid(valor)
+
+
+def _salvar_notas_orientador(notas: dict[str, float], base: pd.DataFrame, ctx, chave_ctx: str, usuario: dict) -> None:
+    """Grava as notas do ciclo e atualiza os dados já carregados na sessão, sem reler tudo."""
+    alunos = base.set_index("Email")
+    for email, nota in notas.items():
+        salvar_avaliacao_orientador(
+            id_ciclo=ctx.id_ciclo,
+            nome_ciclo=ctx.nome_ciclo,
+            id_disciplina=ctx.id_disciplina,
+            email_aluno=email,
+            nome_aluno=str(alunos.at[email, "Nome"]),
+            grupo=str(alunos.at[email, "Grupo"]),
+            nota=nota,
+            email_orientador=usuario["email"],
+        )
+    registrar_log(
+        usuario["email"], usuario["nome"], f"Avaliação orientador pelo feedback - {ctx.nome_ciclo} ({len(notas)} notas)"
+    )
+    guardado = st.session_state.get(chave_ctx)
+    if guardado is not None:
+        horario, ctx_salvo, resumo = guardado
+        ctx_salvo.notas_orientador.update(notas)
+        resumo = resumo.copy()
+        resumo["Orientador"] = [notas.get(e, v) for e, v in zip(resumo["Email"], resumo["Orientador"])]
+        st.session_state[chave_ctx] = (horario, ctx_salvo, resumo)
+
+
+def _aviso_notas(n: int, nome_ciclo: str, republicar: int) -> str:
+    texto = f"{n} nota(s) do orientador do {nome_ciclo} salva(s)."
+    if republicar:
+        texto += f" {republicar} aluno(s) já tinham feedback publicado: atualize a publicação para o aluno ver a nota nova."
+    return texto
 
 
 def _multiselect(label: str, opcoes: list, *, key: str, placeholder: str, format_func=str) -> list:
@@ -170,6 +209,7 @@ def render(usuario: dict) -> None:
                 "Email": email,
                 "Nome": row["Nome"],
                 "Grupo": row["Grupo"],
+                "Nota orientador": _fmt_nota_orientador(row.get("Orientador")),
                 "Pontos de atenção": fb.atencoes,
                 "Sugestão de 1x1": fb.sugestao_1x1,
                 "1x1": bool(reg.get("um_a_um")),
@@ -209,10 +249,16 @@ def render(usuario: dict) -> None:
         height=min(38 * (n + 1), 460),
         key=f"fb_tabela|{ctx.id_ciclo}|{filtro}|{versao}",
         column_order=[c for c in tabela.columns if c != "Email"],
-        disabled=[c for c in tabela.columns if c != "Selecionar"],
+        disabled=[c for c in tabela.columns if c not in ("Selecionar", "Nota orientador")],
         column_config={
             "Selecionar": st.column_config.CheckboxColumn(
                 "Selecionar", help="Alunos que entram na publicação em lote. Desmarque quem precisa de mais revisão."
+            ),
+            "Nota orientador": st.column_config.TextColumn(
+                "Nota orientador ✏️",
+                help=f"Avaliação do orientador no {ctx.nome_ciclo}, de 0 a 10 (ex.: 8 ou 8,5). "
+                "Edite e clique em Salvar notas do orientador; vale sempre a nota mais recente.",
+                width="small",
             ),
             "1x1": st.column_config.CheckboxColumn("1x1", help="Marcado pela equipe docente; o aluno não vê."),
             "Sugestão de 1x1": st.column_config.TextColumn(
@@ -220,6 +266,37 @@ def render(usuario: dict) -> None:
             ),
         },
     )
+    nota_antes = dict(zip(tabela["Email"], tabela["Nota orientador"]))
+    mudou = {
+        e: str(v or "").strip()
+        for e, v in zip(editada["Email"], editada["Nota orientador"])
+        if str(v or "").strip() != nota_antes.get(e, "")
+    }
+    if mudou:
+        nome_de = dict(zip(base["Email"], base["Nome"]))
+        validas = {e: parse_nota_orientador(v) for e, v in mudou.items() if parse_nota_orientador(v) is not None}
+        invalidas = [nome_de[e] for e, v in mudou.items() if v and parse_nota_orientador(v) is None]
+        vazias = [nome_de[e] for e, v in mudou.items() if not v]
+        n1, n2 = st.columns([3, 1], vertical_alignment="center")
+        if invalidas:
+            n1.error(f"Nota inválida (use de 0 a 10, ex.: 8 ou 8,5): {', '.join(invalidas)}.")
+        elif vazias:
+            n1.warning(f"Nota apagada não é removida ({', '.join(vazias)}): para corrigir, digite a nota certa.")
+        else:
+            n1.info(f"{len(validas)} nota(s) do orientador alterada(s) na tabela, ainda não salva(s).")
+        if n2.button(
+            f"Salvar notas do orientador ({len(validas)})",
+            type="primary",
+            disabled=bool(invalidas) or not validas,
+            width="stretch",
+            key="fb_salvar_notas_or",
+        ):
+            _salvar_notas_orientador(validas, base, ctx, chaves[-1], usuario)
+            republicar = sum(1 for e in validas if existentes.get(e, {}).get("publicado_em"))
+            st.session_state[chave_sel] = (modo, versao + 1)
+            _avisar(_aviso_notas(len(validas), ctx.nome_ciclo, republicar))
+            st.rerun()
+
     selecionados = editada.loc[editada["Selecionar"], "Email"].tolist()
     sel_publicados = [e for e in selecionados if existentes.get(e, {}).get("publicado_em")]
 
@@ -268,6 +345,29 @@ def render(usuario: dict) -> None:
     escolhido = nome_por_email[email]
     reg = existentes.get(email, {})
     fb = feedbacks[email]
+
+    nota_atual = _fmt_nota_orientador(base.set_index("Email").at[email, "Orientador"])
+    o1, o2, _ = st.columns([1, 1, 2], vertical_alignment="bottom")
+    nota_txt = o1.text_input(
+        f"Nota do orientador no {ctx.nome_ciclo} (0 a 10)",
+        value=nota_atual,
+        placeholder="Ex.: 8,5",
+        key=f"fb_nota_or_{ctx.id_ciclo}_{email}_{nota_atual}",
+    )
+    if o2.button(
+        "Salvar nota",
+        key="fb_salvar_nota_or_um",
+        width="stretch",
+        disabled=nota_txt.strip().replace(",", ".") == nota_atual,
+    ):
+        nota = parse_nota_orientador(nota_txt)
+        if nota is None:
+            st.error("Nota inválida: use de 0 a 10, ex.: 8 ou 8,5.")
+        else:
+            _salvar_notas_orientador({email: nota}, base, ctx, chaves[-1], usuario)
+            st.session_state[chave_sel] = (modo, versao + 1)
+            _avisar(_aviso_notas(1, ctx.nome_ciclo, 1 if reg.get("publicado_em") else 0))
+            st.rerun()
 
     e1, e2 = st.columns([3, 1], vertical_alignment="top")
     mensagem = e1.text_area(

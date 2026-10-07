@@ -16,7 +16,6 @@ from domain.dossie_aluno import combinar_resumos, titulo_ciclos
 from domain.feedback_aluno import CICLO_MIN_ACUMULADO, feedback_ativo_alunos, montar_feedback
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
-from utils.preferencias_sala import selectbox_sala
 from views.aluno_feedback import render_painel
 from views.prof_dossie_aluno import _carregar_ciclos
 
@@ -43,6 +42,48 @@ def _linha_base(email: str, ctx, usuario: dict) -> dict:
     }
 
 
+def _multiselect(label: str, opcoes: list, *, key: str, placeholder: str, format_func=str) -> list:
+    """Vazio = sem filtro. Descarta da seleção o que deixou de existir (ex.: grupo de sala desmarcada)."""
+    if key in st.session_state:
+        st.session_state[key] = [o for o in st.session_state[key] if o in opcoes]
+    return st.multiselect(label, opcoes, key=key, placeholder=placeholder, format_func=format_func)
+
+
+def _filtrar_salas_grupos(resumo: pd.DataFrame, usuario: dict, id_disc: str, col_sala, col_grupo) -> tuple[pd.DataFrame, str]:
+    salas = ordenar_grupos_lista([s for s in resumo["Sala"].unique().tolist() if s])
+    sala_pref = sala_padrao_orientador(usuario, id_disc)
+    if "fb_salas" not in st.session_state and sala_pref in salas:
+        st.session_state["fb_salas"] = [sala_pref]
+    with col_sala:
+        salas_sel = _multiselect("Salas:", salas, key="fb_salas", placeholder="Todas")
+    base = resumo[resumo["Sala"].isin(salas_sel)] if salas_sel else resumo
+
+    pares = base[["Sala", "Grupo"]].drop_duplicates()
+    pares = pares[pares["Grupo"].astype(str).str.strip() != ""]
+    ordem_salas = {s: i for i, s in enumerate(salas)}
+
+    def chave_grupo(par):
+        g = str(par[1]).strip()
+        return (ordem_salas.get(par[0], len(salas)), 0 if g.isdigit() else 1, int(g) if g.isdigit() else 0, chave_ordenacao_texto(g))
+
+    pares = sorted(zip(pares["Sala"], pares["Grupo"]), key=chave_grupo)
+    nomes = [str(g) for _, g in pares]
+    repetidos = {g for g in nomes if nomes.count(g) > 1}
+    opcoes = [f"{s}\t{g}" for s, g in pares]
+
+    def rotulo(valor: str) -> str:
+        s, g = valor.split("\t", 1)
+        nome = f"Grupo {g}" if g.isdigit() else g
+        return f"{nome} ({s})" if g in repetidos else nome
+
+    with col_grupo:
+        grupos_sel = _multiselect("Grupos:", opcoes, key="fb_grupos", placeholder="Todos", format_func=rotulo)
+    if grupos_sel:
+        base = base[(base["Sala"].astype(str) + "\t" + base["Grupo"].astype(str)).isin(grupos_sel)]
+    filtro = "|".join(salas_sel) + "#" + "|".join(grupos_sel)
+    return base.reset_index(drop=True), filtro
+
+
 def render(usuario: dict) -> None:
     from data.supabase_feedback import despublicar, listar_do_ciclo, publicar, salvar_rascunhos
 
@@ -62,7 +103,7 @@ def render(usuario: dict) -> None:
 
     df_disc = ler_aba("Disciplinas")
     lista_disc = df_disc["Nome_Disciplina"].unique().tolist()
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     disc_sel = c1.selectbox("Disciplina:", lista_disc, index=indice_disciplina_ativa(df_disc, lista_disc), key="fb_disc")
     id_disc = id_disciplina_por_nome(df_disc, disc_sel)
     df_ciclos = ler_aba("Ciclos")
@@ -85,13 +126,10 @@ def render(usuario: dict) -> None:
         st.info("Nenhum aluno com grupo nesta disciplina.")
         return
 
-    salas = ordenar_grupos_lista([s for s in resumo["Sala"].unique().tolist() if s])
-    sala_pref = sala_padrao_orientador(usuario, id_disc)
-    if "fb_sala" not in st.session_state and sala_pref in salas:
-        st.session_state["fb_sala"] = sala_pref
-    with c3:
-        sala = selectbox_sala("Sala:", salas, key="fb_sala", usuario=usuario) if salas else "Todas"
-    base = (resumo if sala == "Todas" else resumo[resumo["Sala"] == sala]).reset_index(drop=True)
+    base, filtro = _filtrar_salas_grupos(resumo, usuario, id_disc, c3, c4)
+    if base.empty:
+        st.info("Nenhum aluno nos filtros escolhidos.")
+        return
 
     a1, a2 = st.columns([4, 1], vertical_alignment="center")
     a1.caption(f"Dados carregados às {datetime.fromtimestamp(carregado_em, _TZ):%H:%M}.")
@@ -149,7 +187,7 @@ def render(usuario: dict) -> None:
     m3.metric("Sugestão de 1x1", int((tabela["Sugestão de 1x1"] != "").sum()))
     m4.metric("1x1 marcados", int(tabela["1x1"].sum()))
 
-    chave_sel = f"fb_sel|{ctx.id_ciclo}|{sala}"
+    chave_sel = f"fb_sel|{ctx.id_ciclo}|{filtro}"
     modo, versao = st.session_state.get(chave_sel, ("pendentes", 0))
     if modo == "todos":
         tabela["Selecionar"] = True
@@ -169,7 +207,7 @@ def render(usuario: dict) -> None:
         hide_index=True,
         width="stretch",
         height=min(38 * (n + 1), 460),
-        key=f"fb_tabela|{ctx.id_ciclo}|{sala}|{versao}",
+        key=f"fb_tabela|{ctx.id_ciclo}|{filtro}|{versao}",
         column_order=[c for c in tabela.columns if c != "Email"],
         disabled=[c for c in tabela.columns if c != "Selecionar"],
         column_config={
@@ -189,7 +227,7 @@ def render(usuario: dict) -> None:
         f"**{len(selecionados)} de {n} alunos selecionados.** A publicação usa os dados de agora e mantém as "
         "mensagens e marcações de 1x1 salvas; quem já estava publicado tem o feedback atualizado."
     )
-    confirmar = st.checkbox("Revisei o feedback dos alunos selecionados", key=f"fb_conf_{ctx.id_ciclo}_{sala}")
+    confirmar = st.checkbox("Revisei o feedback dos alunos selecionados", key=f"fb_conf_{ctx.id_ciclo}_{filtro}")
     b1, b2, _ = st.columns([1, 1, 2])
     if b1.button(
         f"Publicar selecionados ({len(selecionados)})",
@@ -225,7 +263,7 @@ def render(usuario: dict) -> None:
     ordem = sorted(zip(base["Email"], base["Nome"]), key=lambda par: chave_ordenacao_texto(par[1]))
     nome_por_email = dict(ordem)
     email = st.selectbox(
-        "Aluno:", list(nome_por_email), format_func=nome_por_email.get, key=f"fb_aluno_{ctx.id_ciclo}_{sala}"
+        "Aluno:", list(nome_por_email), format_func=nome_por_email.get, key=f"fb_aluno_{ctx.id_ciclo}_{filtro}"
     )
     escolhido = nome_por_email[email]
     reg = existentes.get(email, {})

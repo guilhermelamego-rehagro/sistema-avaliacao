@@ -388,6 +388,10 @@ else:
     if st.session_state.get("escolha_menu") in LEGACY_ROUTES:
         st.session_state["escolha_menu"] = LEGACY_ROUTES[st.session_state["escolha_menu"]]
 
+    if perfil in ("Professor", "Secretaria"):
+        from domain.boletim_calculado import garantir_calculo_do_dia
+
+        garantir_calculo_do_dia(ator)
     menu = renderizar_sidebar(aluno, perfil)
     rolar_topo_ao_trocar_tela(f"{aluno.get('email', '')}|{perfil}|{menu}")
     render_banner_impersonacao()

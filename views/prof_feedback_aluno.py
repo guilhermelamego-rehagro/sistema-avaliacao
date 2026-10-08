@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from data.sheets import ler_aba
+from domain import boletim_calculado as boletim
 from domain.avaliacoes import formatar_nota_grid, parse_nota_orientador, salvar_avaliacao_orientador
 from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import hoje_normalizado, indice_ciclo_academico_padrao, ordenar_ciclos
@@ -20,7 +21,8 @@ from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 from views.aluno_feedback import render_painel
-from views.prof_dossie_aluno import _carregar_ciclos, _resultados_finais
+from views.prof_dossie_aluno import _carregar_ciclos
+from views.status_boletim import render_status
 
 _TZ = ZoneInfo("America/Sao_Paulo")
 
@@ -46,7 +48,7 @@ def _linha_base(email: str, ctx, usuario: dict) -> dict:
 
 
 def _chave_boletins(id_disc: str) -> str:
-    """Mesma chave da Situação final do Dossiê: os boletins calculados valem para as duas telas."""
+    """Mesma chave da Situação final do Dossiê (boletins calculados na sessão quando faltam na tabela)."""
     return f"_dossie_final|{id_disc}"
 
 
@@ -91,6 +93,7 @@ def _salvar_notas_orientador(notas: dict[str, float], base: pd.DataFrame, ctx, c
     if boletins is not None:
         for email in notas:
             boletins[1].pop(email, None)
+    boletim.recalcular(ctx.id_disciplina, notas, autor=str(usuario.get("email", "")).lower())
     guardado = st.session_state.get(chave_ctx)
     if guardado is not None:
         horario, ctx_salvo, resumo = guardado
@@ -200,22 +203,24 @@ def render(usuario: dict) -> None:
     a1.caption(f"Dados carregados às {datetime.fromtimestamp(carregado_em, _TZ):%H:%M}.")
     chave_bol = _chave_boletins(ctx.id_disciplina)
     if a2.button("Atualizar dados", width="stretch", key="fb_atualizar"):
-        for chave in [*chaves, chave_bol]:
+        for chave in [*chaves, chave_bol, boletim.chave_sessao(id_disc)]:
             st.session_state.pop(chave, None)
         st.rerun()
 
     resultados: dict = {}
     parciais: dict[str, tuple[float, float]] = {}
-    if st.toggle(
-        "Mostrar nota até agora (só a equipe vê)",
-        key=f"fb_nota_parcial_{id_disc}",
-        help="Calcula o boletim de cada aluno do filtro (mesmas regras de Minhas notas e da Liberação de notas) "
-        "e soma só os componentes que já têm nota. Ex.: 42 de 60 = 42 pontos dos 60 já apurados, "
-        f"aproveitamento de 70%. 🟢 a partir de {fmt_num(NOTA_APROVACAO, 0)}% (ritmo de aprovação), "
-        f"🟡 de {fmt_num(NOTA_RECUPERACAO, 0)}% a {fmt_num(NOTA_APROVACAO, 0)}%, 🔴 abaixo de "
-        f"{fmt_num(NOTA_RECUPERACAO, 0)}%. Não aparece para o aluno nem entra no feedback publicado.",
-    ):
-        resultados = _resultados_finais(id_disc, base, ciclos, chave_bol)
+    try:
+        salvos, concluido = boletim.carregar_salvos(id_disc)
+    except boletim.BoletimIndisponivel:
+        st.caption(
+            "Nota até agora indisponível: confira se as tabelas de scripts/sql/10_boletim_calculado.sql "
+            "foram criadas no Supabase."
+        )
+    else:
+        if not salvos and boletim.andamento(id_disc) is None:
+            boletim.recalcular(id_disc, autor=str(usuario.get("email", "")).lower())
+        render_status(id_disc, usuario, concluido, chave="fb_boletim")
+        resultados = {e: salvos[e] for e in base["Email"] if e in salvos}
         parciais = {e: p for e, r in resultados.items() if (p := _nota_ate_agora(r)) is not None}
 
     try:
@@ -317,7 +322,12 @@ def render(usuario: dict) -> None:
                 width="small",
             ),
             "Nota até agora": st.column_config.TextColumn(
-                help="Pontos obtidos de pontos já apurados (componentes com nota). Só a equipe vê.", width="small"
+                help="Pontos obtidos dos pontos já apurados (só componentes com nota; mesmas regras de Minhas "
+                "notas). Ex.: 42 de 60 = aproveitamento de 70%. "
+                f"🟢 a partir de {fmt_num(NOTA_APROVACAO, 0)}% (ritmo de aprovação), 🟡 de "
+                f"{fmt_num(NOTA_RECUPERACAO, 0)}% a {fmt_num(NOTA_APROVACAO, 0)}%, 🔴 abaixo de "
+                f"{fmt_num(NOTA_RECUPERACAO, 0)}%. Só a equipe vê.",
+                width="small",
             ),
             "Aproveitamento": st.column_config.NumberColumn(
                 format="%d%%",

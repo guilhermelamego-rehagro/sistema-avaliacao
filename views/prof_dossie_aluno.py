@@ -13,6 +13,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from data.sheets import ler_aba
+from domain import boletim_calculado as boletim
 from domain.anotacoes_daily import AVISO_USO_INTERNO
 from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import indice_ciclo_academico_padrao, ordenar_ciclos
@@ -46,6 +47,7 @@ from domain.situacao_final import (
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 from utils.preferencias_sala import selectbox_sala
+from views.status_boletim import render_status
 
 _VALIDADE_DADOS_S = 600
 _TZ = ZoneInfo("America/Sao_Paulo")
@@ -436,24 +438,46 @@ def _carregar_ciclos(id_disc: str, ciclos_sel: pd.DataFrame, usuario: dict) -> t
     return ctxs, resumos, min(horarios), chaves
 
 
-def _resultados_finais(id_disc: str, base: pd.DataFrame, ciclos: pd.DataFrame, chave: str) -> dict:
-    """Situação final dos alunos filtrados; calcula só quem ainda não está na sessão."""
+def _calcular_com_barra(id_disc: str, alunos: pd.DataFrame, ciclos: pd.DataFrame) -> dict:
+    barra = st.progress(0.0, text="Calculando a situação final (boletim de cada aluno)…")
+    novos = calcular_resultados(
+        id_disc,
+        alunos,
+        periodos_ciclos(ciclos),
+        ao_avancar=lambda i, n: barra.progress(i / n, text=f"Calculando a situação final… {i} de {n} alunos"),
+    )
+    barra.empty()
+    return novos
+
+
+def _resultados_na_sessao(id_disc: str, base: pd.DataFrame, ciclos: pd.DataFrame, chave: str) -> dict:
+    """Sem a tabela de boletins: calcula e guarda só na sessão."""
     guardado = st.session_state.get(chave)
     if guardado is None or time.time() - guardado[0] > _VALIDADE_DADOS_S:
         guardado = (time.time(), {})
     faltando = base[~base["Email"].isin(guardado[1])]
     if not faltando.empty:
-        barra = st.progress(0.0, text="Calculando a situação final (boletim de cada aluno)…")
-        novos = calcular_resultados(
-            id_disc,
-            faltando,
-            periodos_ciclos(ciclos),
-            ao_avancar=lambda i, n: barra.progress(i / n, text=f"Calculando a situação final… {i} de {n} alunos"),
-        )
-        barra.empty()
-        guardado = (guardado[0], {**guardado[1], **novos})
+        guardado = (guardado[0], {**guardado[1], **_calcular_com_barra(id_disc, faltando, ciclos)})
         st.session_state[chave] = guardado
     return {e: guardado[1][e] for e in base["Email"] if e in guardado[1]}
+
+
+def _resultados_finais(id_disc: str, base: pd.DataFrame, ciclos: pd.DataFrame, chave: str, usuario: dict) -> dict:
+    """Situação final dos alunos filtrados: usa o último cálculo salvo e calcula na hora só quem falta."""
+    try:
+        salvos, concluido = boletim.carregar_salvos(id_disc)
+    except boletim.BoletimIndisponivel:
+        return _resultados_na_sessao(id_disc, base, ciclos, chave)
+    render_status(id_disc, usuario, concluido, chave="dossie_boletim")
+    faltando = base[~base["Email"].isin(salvos)]
+    if not faltando.empty and boletim.andamento(id_disc) is None:
+        novos = _calcular_com_barra(id_disc, faltando, ciclos)
+        try:
+            boletim.salvar_resultados(id_disc, novos, autor=str(usuario.get("email", "")).lower())
+        except boletim.BoletimIndisponivel:
+            pass
+        salvos = {**salvos, **novos}
+    return {e: salvos[e] for e in base["Email"] if e in salvos}
 
 
 def render(usuario: dict):
@@ -504,7 +528,7 @@ def render(usuario: dict):
     )
     chave_final = f"_dossie_final|{id_disc}"
     if a2.button("Atualizar dados", width="stretch", key="dossie_atualizar"):
-        for chave in chaves + [chave_final]:
+        for chave in chaves + [chave_final, boletim.chave_sessao(id_disc)]:
             st.session_state.pop(chave, None)
         st.rerun()
     if resumo.empty:
@@ -540,10 +564,10 @@ def render(usuario: dict):
     if st.toggle(
         "Situação final (encerramento da disciplina)",
         key=f"dossie_encerramento_{id_disc}",
-        help="Calcula o boletim de cada aluno filtrado (mesmas regras da Liberação de notas), permite filtrar "
+        help="Usa o boletim calculado de cada aluno (mesmas regras da Liberação de notas), permite filtrar "
         "por situação e mostra no dossiê os motivos que levaram a ela.",
     ):
-        resultados = _resultados_finais(id_disc, base, ciclos, chave_final)
+        resultados = _resultados_finais(id_disc, base, ciclos, chave_final, usuario)
         presentes = {r.situacao for r in resultados.values()}
         opcoes_sit = [s for s in SITUACOES if s in presentes]
         if any(r.segunda_chamada for r in resultados.values()):

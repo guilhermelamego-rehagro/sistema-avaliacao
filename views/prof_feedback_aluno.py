@@ -13,13 +13,14 @@ from domain.avaliacoes import formatar_nota_grid, parse_nota_orientador, salvar_
 from domain.cadastros import sala_padrao_orientador
 from domain.ciclos import hoje_normalizado, indice_ciclo_academico_padrao, ordenar_ciclos
 from domain.encontro_presencial import ciclos_visiveis_avaliacao
-from domain.dossie_aluno import combinar_resumos, titulo_ciclos
+from domain.dossie_aluno import combinar_resumos, fmt_num, titulo_ciclos
 from domain.feedback_aluno import CICLO_MIN_ACUMULADO, feedback_ativo_alunos, montar_feedback
+from domain.situacao_final import NOTA_APROVACAO, NOTA_RECUPERACAO
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
 from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 from views.aluno_feedback import render_painel
-from views.prof_dossie_aluno import _carregar_ciclos
+from views.prof_dossie_aluno import _carregar_ciclos, _resultados_finais
 
 _TZ = ZoneInfo("America/Sao_Paulo")
 
@@ -44,6 +45,27 @@ def _linha_base(email: str, ctx, usuario: dict) -> dict:
     }
 
 
+def _chave_boletins(id_disc: str) -> str:
+    """Mesma chave da Situação final do Dossiê: os boletins calculados valem para as duas telas."""
+    return f"_dossie_final|{id_disc}"
+
+
+def _nota_ate_agora(resultado) -> tuple[float, float] | None:
+    """(pontos obtidos, pontos já apurados) somando só os componentes que já têm nota."""
+    comp = resultado.componentes
+    if comp.empty:
+        return None
+    apurados = comp[comp["Nota"].notna()]
+    peso = float(apurados["Peso"].sum())
+    if peso <= 0:
+        return None
+    return float(apurados["Pontos"].sum()), peso
+
+
+def _icone_aproveitamento(pct: float) -> str:
+    return "🟢" if pct >= NOTA_APROVACAO else ("🟡" if pct >= NOTA_RECUPERACAO else "🔴")
+
+
 def _fmt_nota_orientador(valor) -> str:
     return "" if valor is None or pd.isna(valor) else formatar_nota_grid(valor)
 
@@ -65,6 +87,10 @@ def _salvar_notas_orientador(notas: dict[str, float], base: pd.DataFrame, ctx, c
     registrar_log(
         usuario["email"], usuario["nome"], f"Avaliação orientador pelo feedback - {ctx.nome_ciclo} ({len(notas)} notas)"
     )
+    boletins = st.session_state.get(_chave_boletins(ctx.id_disciplina))
+    if boletins is not None:
+        for email in notas:
+            boletins[1].pop(email, None)
     guardado = st.session_state.get(chave_ctx)
     if guardado is not None:
         horario, ctx_salvo, resumo = guardado
@@ -172,10 +198,25 @@ def render(usuario: dict) -> None:
 
     a1, a2 = st.columns([4, 1], vertical_alignment="center")
     a1.caption(f"Dados carregados às {datetime.fromtimestamp(carregado_em, _TZ):%H:%M}.")
+    chave_bol = _chave_boletins(ctx.id_disciplina)
     if a2.button("Atualizar dados", width="stretch", key="fb_atualizar"):
-        for chave in chaves:
+        for chave in [*chaves, chave_bol]:
             st.session_state.pop(chave, None)
         st.rerun()
+
+    resultados: dict = {}
+    parciais: dict[str, tuple[float, float]] = {}
+    if st.toggle(
+        "Mostrar nota até agora (só a equipe vê)",
+        key=f"fb_nota_parcial_{id_disc}",
+        help="Calcula o boletim de cada aluno do filtro (mesmas regras de Minhas notas e da Liberação de notas) "
+        "e soma só os componentes que já têm nota. Ex.: 42 de 60 = 42 pontos dos 60 já apurados, "
+        f"aproveitamento de 70%. 🟢 a partir de {fmt_num(NOTA_APROVACAO, 0)}% (ritmo de aprovação), "
+        f"🟡 de {fmt_num(NOTA_RECUPERACAO, 0)}% a {fmt_num(NOTA_APROVACAO, 0)}%, 🔴 abaixo de "
+        f"{fmt_num(NOTA_RECUPERACAO, 0)}%. Não aparece para o aluno nem entra no feedback publicado.",
+    ):
+        resultados = _resultados_finais(id_disc, base, ciclos, chave_bol)
+        parciais = {e: p for e, r in resultados.items() if (p := _nota_ate_agora(r)) is not None}
 
     try:
         existentes = {r["email"]: r for r in listar_do_ciclo(ctx.id_ciclo)}
@@ -203,6 +244,14 @@ def render(usuario: dict) -> None:
         reg = existentes.get(email, {})
         fb = feedbacks[email]
         publicado = _fmt_data(reg.get("publicado_em"))
+        parcial = {}
+        if parciais:
+            pontos, peso = parciais.get(email, (None, None))
+            pct = None if pontos is None else round(pontos / peso * 100)
+            parcial = {
+                "Nota até agora": "" if pct is None else f"{_icone_aproveitamento(pct)} {fmt_num(pontos)} de {fmt_num(peso, 0)}",
+                "Aproveitamento": pct,
+            }
         linhas.append(
             {
                 "Selecionar": not publicado,
@@ -210,6 +259,7 @@ def render(usuario: dict) -> None:
                 "Nome": row["Nome"],
                 "Grupo": row["Grupo"],
                 "Nota orientador": _fmt_nota_orientador(row.get("Orientador")),
+                **parcial,
                 "Pontos de atenção": fb.atencoes,
                 "Sugestão de 1x1": fb.sugestao_1x1,
                 "1x1": bool(reg.get("um_a_um")),
@@ -221,11 +271,17 @@ def render(usuario: dict) -> None:
 
     n = len(tabela)
     n_pub = int(tabela["Status"].str.startswith("Publicado").sum())
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Alunos", n)
-    m2.metric("Publicados", f"{n_pub} de {n}")
-    m3.metric("Sugestão de 1x1", int((tabela["Sugestão de 1x1"] != "").sum()))
-    m4.metric("1x1 marcados", int(tabela["1x1"].sum()))
+    metricas = st.columns(5 if parciais else 4)
+    metricas[0].metric("Alunos", n)
+    metricas[1].metric("Publicados", f"{n_pub} de {n}")
+    metricas[2].metric("Sugestão de 1x1", int((tabela["Sugestão de 1x1"] != "").sum()))
+    metricas[3].metric("1x1 marcados", int(tabela["1x1"].sum()))
+    if parciais:
+        metricas[4].metric(
+            f"Abaixo de {fmt_num(NOTA_APROVACAO, 0)}% até agora",
+            int((tabela["Aproveitamento"] < NOTA_APROVACAO).sum()),
+            help="Alunos cujo aproveitamento nos componentes já apurados está abaixo do ritmo de aprovação.",
+        )
 
     chave_sel = f"fb_sel|{ctx.id_ciclo}|{filtro}"
     modo, versao = st.session_state.get(chave_sel, ("pendentes", 0))
@@ -258,6 +314,14 @@ def render(usuario: dict) -> None:
                 "Nota orientador ✏️",
                 help=f"Avaliação do orientador no {ctx.nome_ciclo}, de 0 a 10 (ex.: 8 ou 8,5). "
                 "Edite e clique em Salvar notas do orientador; vale sempre a nota mais recente.",
+                width="small",
+            ),
+            "Nota até agora": st.column_config.TextColumn(
+                help="Pontos obtidos de pontos já apurados (componentes com nota). Só a equipe vê.", width="small"
+            ),
+            "Aproveitamento": st.column_config.NumberColumn(
+                format="%d%%",
+                help=f"Pontos obtidos ÷ pontos já apurados. A aprovação pede {fmt_num(NOTA_APROVACAO, 0)} no final.",
                 width="small",
             ),
             "1x1": st.column_config.CheckboxColumn("1x1", help="Marcado pela equipe docente; o aluno não vê."),
@@ -345,6 +409,22 @@ def render(usuario: dict) -> None:
     escolhido = nome_por_email[email]
     reg = existentes.get(email, {})
     fb = feedbacks[email]
+
+    if email in resultados:
+        comp = resultados[email].componentes
+        sem_nota = ", ".join(comp.loc[comp["Nota"].isna(), "Componente"]) if not comp.empty else ""
+        if email in parciais:
+            pontos, peso = parciais[email]
+            pct = round(pontos / peso * 100)
+            texto = (
+                f"{_icone_aproveitamento(pct)} **Nota até agora:** {fmt_num(pontos)} dos {fmt_num(peso, 0)} pontos "
+                f"já apurados — aproveitamento de **{pct}%** (a aprovação pede {fmt_num(NOTA_APROVACAO, 0)})."
+            )
+        else:
+            texto = "**Nota até agora:** nenhum componente com nota ainda."
+        if sem_nota:
+            texto += f" Ainda sem nota: {sem_nota}."
+        st.markdown(texto + " _Só a equipe vê._")
 
     nota_atual = _fmt_nota_orientador(base.set_index("Email").at[email, "Orientador"])
     o1, o2, _ = st.columns([1, 1, 2], vertical_alignment="bottom")

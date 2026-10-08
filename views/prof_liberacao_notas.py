@@ -14,6 +14,7 @@ from domain.liberacao_notas import notas_finais_liberadas, salvar_liberacao_nota
 from domain.notas import bytes_excel_boletins, montar_painel_boletins_disciplina
 from domain.relatorio_secretaria import diferencas, fmt_data_hora, momento, montar_relatorio, publicar_relatorio
 from utils.disciplina import id_disciplina_por_nome, indice_disciplina_ativa
+from utils.leitura_lote import leitura_em_lote
 from utils.logs import registrar_log
 from utils.ordenacao import chave_ordenacao_texto, ordenar_grupos_lista
 
@@ -44,7 +45,8 @@ def _carregar_ou_usar_cache(id_disc: str, *, forcar: bool) -> tuple[pd.DataFrame
     chave_em = _chave_cache(id_disc, "em")
 
     if forcar or chave_df not in st.session_state:
-        df = montar_painel_boletins_disciplina(id_disc)
+        with leitura_em_lote():
+            df = montar_painel_boletins_disciplina(id_disc)
         legendas = list(df.attrs.get("legendas_colunas") or [])
         agora = datetime.now(_TZ)
         st.session_state[chave_df] = df

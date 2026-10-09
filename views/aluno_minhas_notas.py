@@ -83,25 +83,26 @@ def _presenca_aulas(email: str, id_disc: str) -> tuple[int, int]:
     return int((vivido["Status_Aluno"] == "Presente").sum()), len(vivido)
 
 
+def _indicador(col, rotulo: str, valor: str) -> None:
+    """Como st.metric, com valor menor e quebra de linha (st.metric corta textos longos com …)."""
+    col.markdown(
+        f"<div style='font-size:0.875rem;margin-bottom:0.25rem'>{rotulo}</div>"
+        f"<div style='font-size:1.5rem;line-height:1.25'>{valor}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_resultado_final(email: str, id_disc: str, nota_final: float | None) -> None:
     presencas, aulas = _presenca_aulas(email, id_disc)
     pct = presencas / aulas * 100 if aulas else None
     status = status_academico(pct, nota_final)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Nota final", "Pendente" if nota_final is None else f"{nota_final:.0f}")
-    c2.metric(
-        "Presença nas aulas",
-        "—" if pct is None else f"{pct:.1f}%".replace(".", ","),
-        help="Aulas da disciplina (sem as dailies, que já entram como nota).",
-    )
-    c3.markdown(
-        "<div style='font-size:0.875rem;margin-bottom:0.25rem'>Situação</div>"
-        f"<div style='font-size:1.6rem;line-height:1.25'>{_SITUACAO.get(status, status)}</div>",
-        unsafe_allow_html=True,
-    )
+    _indicador(c1, "Nota final", "Pendente" if nota_final is None else f"{nota_final:.0f}")
+    _indicador(c2, "Presença nas aulas", "—" if pct is None else f"{pct:.1f}%".replace(".", ","))
+    _indicador(c3, "Situação", _SITUACAO.get(status, status))
     if aulas:
-        c2.caption(f"{presencas} de {aulas} aulas")
+        c2.caption(f"{presencas} de {aulas} aulas (sem as dailies, que já entram como nota)")
 
     nota_txt = "" if nota_final is None else f"{nota_final:.0f}"
     if status == "Aprovado":

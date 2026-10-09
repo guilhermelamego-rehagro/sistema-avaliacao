@@ -95,7 +95,11 @@ def _render_resultado_final(email: str, id_disc: str, nota_final: float | None) 
         "—" if pct is None else f"{pct:.1f}%".replace(".", ","),
         help="Aulas da disciplina (sem as dailies, que já entram como nota).",
     )
-    c3.metric("Situação", _SITUACAO.get(status, status))
+    c3.markdown(
+        "<div style='font-size:0.875rem;margin-bottom:0.25rem'>Situação</div>"
+        f"<div style='font-size:1.6rem;line-height:1.25'>{_SITUACAO.get(status, status)}</div>",
+        unsafe_allow_html=True,
+    )
     if aulas:
         c2.caption(f"{presencas} de {aulas} aulas")
 

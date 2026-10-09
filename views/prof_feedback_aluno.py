@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -52,16 +53,26 @@ def _chave_boletins(id_disc: str) -> str:
     return f"_dossie_final|{id_disc}"
 
 
-def _nota_ate_agora(resultado) -> tuple[float, float] | None:
-    """(pontos obtidos, pontos já apurados) somando só os componentes que já têm nota."""
+def _apurados_na_turma(resultados) -> set[str]:
+    """Componentes com nota para mais da metade da turma: quem não tem nota neles leva 0, como na nota final."""
+    contagem: Counter[str] = Counter()
+    for r in resultados:
+        comp = r.componentes
+        if not comp.empty:
+            contagem.update(comp.loc[comp["Nota"].notna(), "Componente"])
+    return {nome for nome, n in contagem.items() if n * 2 > len(resultados)}
+
+
+def _nota_ate_agora(resultado, apurados_turma: set[str]) -> tuple[float, float] | None:
+    """(pontos obtidos, pontos já apurados): componentes com nota do aluno ou já apurados na turma."""
     comp = resultado.componentes
     if comp.empty:
         return None
-    apurados = comp[comp["Nota"].notna()]
+    apurados = comp[comp["Nota"].notna() | comp["Componente"].isin(apurados_turma)]
     peso = float(apurados["Peso"].sum())
     if peso <= 0:
         return None
-    return float(apurados["Pontos"].sum()), peso
+    return float(apurados["Pontos"].fillna(0).sum()), peso
 
 
 def _icone_aproveitamento(pct: float) -> str:
@@ -209,6 +220,7 @@ def render(usuario: dict) -> None:
 
     resultados: dict = {}
     parciais: dict[str, tuple[float, float]] = {}
+    apurados_turma: set[str] = set()
     try:
         salvos, concluido = boletim.carregar_salvos(id_disc)
     except boletim.BoletimIndisponivel:
@@ -220,8 +232,9 @@ def render(usuario: dict) -> None:
         if not salvos and boletim.andamento(id_disc) is None:
             boletim.recalcular(id_disc, autor=str(usuario.get("email", "")).lower())
         render_status(id_disc, usuario, concluido, chave="fb_boletim")
+        apurados_turma = _apurados_na_turma([salvos[e] for e in resumo["Email"] if e in salvos])
         resultados = {e: salvos[e] for e in base["Email"] if e in salvos}
-        parciais = {e: p for e, r in resultados.items() if (p := _nota_ate_agora(r)) is not None}
+        parciais = {e: p for e, r in resultados.items() if (p := _nota_ate_agora(r, apurados_turma)) is not None}
 
     try:
         existentes = {r["email"]: r for r in listar_do_ciclo(ctx.id_ciclo)}
@@ -322,8 +335,9 @@ def render(usuario: dict) -> None:
                 width="small",
             ),
             "Nota até agora": st.column_config.TextColumn(
-                help="Pontos obtidos dos pontos já apurados (só componentes com nota; mesmas regras de Minhas "
-                "notas). Ex.: 42 de 60 = aproveitamento de 70%. "
+                help="Pontos obtidos dos pontos já apurados (mesmas regras de Minhas notas). Um componente "
+                "conta como apurado quando mais da metade da turma já tem nota nele; quem não tem nota leva 0, "
+                "como na nota final. Ex.: 42 de 60 = aproveitamento de 70%. "
                 f"🟢 a partir de {fmt_num(NOTA_APROVACAO, 0)}% (ritmo de aprovação), 🟡 de "
                 f"{fmt_num(NOTA_RECUPERACAO, 0)}% a {fmt_num(NOTA_APROVACAO, 0)}%, 🔴 abaixo de "
                 f"{fmt_num(NOTA_RECUPERACAO, 0)}%. Só a equipe vê.",
@@ -422,7 +436,9 @@ def render(usuario: dict) -> None:
 
     if email in resultados:
         comp = resultados[email].componentes
-        sem_nota = ", ".join(comp.loc[comp["Nota"].isna(), "Componente"]) if not comp.empty else ""
+        sem_nota_comp = comp.loc[comp["Nota"].isna(), "Componente"] if not comp.empty else pd.Series(dtype=str)
+        zerados = ", ".join(sem_nota_comp[sem_nota_comp.isin(apurados_turma)])
+        pendentes = ", ".join(sem_nota_comp[~sem_nota_comp.isin(apurados_turma)])
         if email in parciais:
             pontos, peso = parciais[email]
             pct = round(pontos / peso * 100)
@@ -432,8 +448,10 @@ def render(usuario: dict) -> None:
             )
         else:
             texto = "**Nota até agora:** nenhum componente com nota ainda."
-        if sem_nota:
-            texto += f" Ainda sem nota: {sem_nota}."
+        if zerados:
+            texto += f" Sem nota, contando 0 (a turma já tem nota): {zerados}."
+        if pendentes:
+            texto += f" Ainda não apurados na turma: {pendentes}."
         st.markdown(texto + " _Só a equipe vê._")
 
     nota_atual = _fmt_nota_orientador(base.set_index("Email").at[email, "Orientador"])

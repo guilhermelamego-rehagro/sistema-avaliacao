@@ -402,28 +402,46 @@ def atualizar_excluidos(id_janela: str, emails: list[str]):
     salvar_aba(ABA_JANELAS, df, ABAS_AVALIACAO[ABA_JANELAS])
 
 
-def marcar_desempate_coord(id_janela: str, email_vencedor: str) -> str | None:
+def marcar_desempate_coord(id_janela: str, emails_vencedores: str | list[str]) -> str | None:
     """
-    Em empate, a coordenação elege o vencedor do grupo.
-    Zera Vencedor/Desempate_Coord dos demais do mesmo grupo e marca o escolhido.
+    Em empate, a coordenação elege um ou mais melhores do grupo entre os empatados; cada um indica
+    um colega. Desmarca os demais do grupo, exceto quem já confirmou indicação (esse não sai).
     """
     _garantir_abas()
+    if isinstance(emails_vencedores, str):
+        emails_vencedores = [emails_vencedores]
+    escolhidos = {_email_limpo(e) for e in emails_vencedores if _email_limpo(e)}
+    if not escolhidos:
+        return "Marque ao menos um aluno."
     df = carregar_ranking(id_janela)
     if df.empty:
         return "Ranking da janela não encontrado."
-    email_l = _email_limpo(email_vencedor)
-    alvo = df[df["Email_Aluno"].map(_email_limpo) == email_l]
-    if alvo.empty:
+    alvo = df[df["Email_Aluno"].map(_email_limpo).isin(escolhidos)]
+    if alvo["Email_Aluno"].map(_email_limpo).nunique() != len(escolhidos):
         return "Aluno não está no ranking desta janela."
-    grupo = str(alvo.iloc[0].get("Grupo", "")).strip()
-    sala = str(alvo.iloc[0].get("Sala", "")).strip()
+    grupos = alvo[["Sala", "Grupo"]].astype(str).apply(lambda c: c.str.strip()).drop_duplicates()
+    if len(grupos) != 1:
+        return "Marque alunos do mesmo grupo."
+    sala, grupo = grupos.iloc[0]["Sala"], grupos.iloc[0]["Grupo"]
     bloco = df[
         (df["Grupo"].astype(str).str.strip() == grupo)
         & (df["Sala"].astype(str).str.strip() == sala)
     ]
-    elegiveis = candidatos_desempate_grupo(bloco)
-    if elegiveis.empty or email_l not in set(elegiveis["Email_Aluno"].map(_email_limpo)):
+    elegiveis = set(candidatos_desempate_grupo(bloco)["Email_Aluno"].map(_email_limpo))
+    if not escolhidos <= elegiveis:
         return "Só é possível desempatar entre alunos empatados em nota, % dailies e % aulas."
+
+    atuais = bloco[bloco["Vencedor"].astype(str).str.strip().str.lower().isin({"sim", "s", "true", "1"})]
+    ind = carregar_indicacoes(id_janela)
+    confirmados = (
+        set(ind.loc[ind["Status"].astype(str).str.strip().str.lower() == "confirmado", "Email_Vencedor"].map(_email_limpo))
+        if not ind.empty
+        else set()
+    )
+    presos = atuais[atuais["Email_Aluno"].map(_email_limpo).isin(confirmados - escolhidos)]
+    if not presos.empty:
+        nomes = ", ".join(presos["Nome_Aluno"].astype(str).str.strip())
+        return f"{nomes} já indicou um colega e não pode ser desmarcado."
 
     full = carregar_ranking()
     mask_janela = full["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()
@@ -433,10 +451,10 @@ def marcar_desempate_coord(id_janela: str, email_vencedor: str) -> str | None:
     mask = mask_janela & mask_grupo
     full.loc[mask, "Vencedor"] = "Não"
     full.loc[mask, "Desempate_Coord"] = "Não"
-    mask_aluno = mask_janela & (full["Email_Aluno"].map(_email_limpo) == email_l)
-    full.loc[mask_aluno, "Vencedor"] = "Sim"
-    full.loc[mask_aluno, "Desempate_Coord"] = "Sim"
-    full.loc[mask_aluno, "Posicao_Grupo"] = 1
+    mask_alunos = mask & full["Email_Aluno"].map(_email_limpo).isin(escolhidos)
+    full.loc[mask_alunos, "Vencedor"] = "Sim"
+    full.loc[mask_alunos, "Desempate_Coord"] = "Sim"
+    full.loc[mask_alunos, "Posicao_Grupo"] = 1
     salvar_aba(ABA_RANKING, full, ABAS_AVALIACAO[ABA_RANKING])
     return None
 

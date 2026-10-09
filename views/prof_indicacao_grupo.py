@@ -88,8 +88,8 @@ def _escolher_ciclo(id_disc: str, rodadas: pd.DataFrame) -> tuple[str, str] | No
     return ids[i], nomes[i]
 
 
-def _montar_quadro(rank: pd.DataFrame, ind: pd.DataFrame, status: str) -> tuple[pd.DataFrame, list[dict]]:
-    """Uma linha por grupo + lista dos grupos que precisam de escolha manual."""
+def _montar_quadro(rank: pd.DataFrame, ind: pd.DataFrame, status: str) -> tuple[pd.DataFrame, list[dict], list[dict]]:
+    """Uma linha por grupo + grupos empatados ainda sem escolha + empates já decididos (editáveis)."""
     feitos: dict[str, str] = {}
     if not ind.empty:
         conf = ind[ind["Status"].astype(str).str.strip().str.lower() == "confirmado"]
@@ -98,28 +98,36 @@ def _montar_quadro(rank: pd.DataFrame, ind: pd.DataFrame, status: str) -> tuple[
 
     linhas: list[dict] = []
     pendentes: list[dict] = []
+    decididos: list[dict] = []
     for (sala, grupo), bloco in rank.groupby(["Sala", "Grupo"], dropna=False):
         sala, grupo = str(sala).strip(), str(grupo).strip()
         ven = bloco[bloco["Vencedor"].astype(str).str.strip().str.lower().isin(_SIM)]
+        empatados = candidatos_desempate_grupo(bloco)
+        sem_nota = pd.to_numeric(empatados.get("Nota_Ciclo"), errors="coerce").isna().all()
+        item = {"sala": sala, "grupo": grupo, "empatados": empatados, "sem_nota": sem_nota}
         indicado = ""
         if not ven.empty:
-            v = ven.iloc[0]
-            melhor = str(v["Nome_Aluno"]).strip()
-            email_v = str(v["Email_Aluno"]).strip().lower()
-            if email_v in feitos:
-                situacao, indicado = SIT_INDICOU, feitos[email_v]
+            nomes = ven["Nome_Aluno"].astype(str).str.strip().tolist()
+            emails = ven["Email_Aluno"].astype(str).str.strip().str.lower().tolist()
+            melhor = " e ".join(nomes)
+            if len(nomes) == 1:
+                indicado = feitos.get(emails[0], "")
+            else:
+                indicado = "; ".join(f"{n} → {feitos[e]}" for n, e in zip(nomes, emails) if e in feitos)
+            if all(e in feitos for e in emails):
+                situacao = SIT_INDICOU
             elif status == STATUS_ABERTA:
                 situacao = SIT_AGUARDANDO
             elif status == STATUS_FECHADA:
                 situacao = SIT_NAO_INDICOU
             else:
                 situacao = SIT_PRONTO
+            if len(empatados) > 1:
+                decididos.append({**item, "atuais": emails, "indicaram": [e for e in emails if e in feitos]})
         else:
-            empatados = candidatos_desempate_grupo(bloco)
-            sem_nota = pd.to_numeric(empatados.get("Nota_Ciclo"), errors="coerce").isna().all()
             situacao = SIT_SEM_NOTA if sem_nota else SIT_EMPATE
             melhor = ", ".join(empatados["Nome_Aluno"].astype(str).str.strip())
-            pendentes.append({"sala": sala, "grupo": grupo, "empatados": empatados, "sem_nota": sem_nota})
+            pendentes.append(item)
         linhas.append(
             {
                 "Sala": sala,
@@ -135,7 +143,7 @@ def _montar_quadro(rank: pd.DataFrame, ind: pd.DataFrame, status: str) -> tuple[
         quadro["_s"] = quadro["Sala"].map(chave_ordenacao_texto)
         quadro["_g"] = quadro["Grupo"].map(chave_ordenacao_texto)
         quadro = quadro.sort_values(["_s", "_g"], kind="mergesort").drop(columns=["_s", "_g"])
-    return quadro.reset_index(drop=True), pendentes
+    return quadro.reset_index(drop=True), pendentes, decididos
 
 
 def _passo(col, feito: bool, titulo: str, detalhe: str):
@@ -232,39 +240,55 @@ def _render_acao(usuario: dict, janela: pd.Series, pendentes: list[dict]):
                 st.rerun()
 
 
-def _render_pendentes(id_j: str, pendentes: list[dict]):
-    if not pendentes:
+def _escolha_empate(id_j: str, p: dict, atuais: list[str]):
+    opcoes = {}
+    for _, r in p["empatados"].iterrows():
+        nota = _num(r.get("Nota_Ciclo"))
+        nota_txt = "sem nota" if nota is None else f"nota {nota:.1f}"
+        opcoes[
+            f"{str(r['Nome_Aluno']).strip()} ({nota_txt} · dailies {_num(r.get('Pct_Dailies')) or 0:.0f}% "
+            f"· aulas {_num(r.get('Pct_Aulas')) or 0:.0f}%)"
+        ] = str(r["Email_Aluno"]).strip().lower()
+    chave = f"{id_j}_{p['sala']}_{p['grupo']}"
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    with c1:
+        escolha = st.multiselect(
+            f"Sala {p['sala']} · Grupo {p['grupo']}",
+            list(opcoes.keys()),
+            default=[lab for lab, em in opcoes.items() if em in atuais],
+            key=f"ind_grp_emp_{chave}",
+            placeholder="Marque um ou mais",
+        )
+    with c2:
+        mudou = sorted(opcoes[e] for e in escolha) != sorted(atuais)
+        if st.button("Confirmar", key=f"ind_grp_emp_ok_{chave}", width="stretch", disabled=not escolha or not mudou):
+            erro = marcar_desempate_coord(id_j, [opcoes[e] for e in escolha])
+            if erro:
+                st.error(erro)
+            else:
+                st.rerun()
+
+
+def _render_pendentes(id_j: str, pendentes: list[dict], decididos: list[dict]):
+    if not pendentes and not decididos:
         return
-    st.markdown("**Definir o melhor do grupo**")
-    st.caption(
-        "Empate: alunos iguais em nota do ciclo, % de dailies e % de aulas. "
-        "Sem nota: o ciclo ainda não tem nota lançada para o grupo."
-    )
-    for p in pendentes:
-        emp = p["empatados"]
-        opcoes = {}
-        for _, r in emp.iterrows():
-            nota = _num(r.get("Nota_Ciclo"))
-            nota_txt = "sem nota" if nota is None else f"nota {nota:.1f}"
-            opcoes[
-                f"{str(r['Nome_Aluno']).strip()} ({nota_txt} · dailies {_num(r.get('Pct_Dailies')) or 0:.0f}% "
-                f"· aulas {_num(r.get('Pct_Aulas')) or 0:.0f}%)"
-            ] = str(r["Email_Aluno"])
-        chave = f"{id_j}_{p['sala']}_{p['grupo']}"
-        c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
-        with c1:
-            escolha = st.selectbox(
-                f"Sala {p['sala']} · Grupo {p['grupo']}",
-                list(opcoes.keys()),
-                key=f"ind_grp_emp_{chave}",
+    if pendentes:
+        st.markdown("**Definir o melhor do grupo**")
+        st.caption(
+            "Empate: alunos iguais em nota do ciclo, % de dailies e % de aulas. "
+            "Sem nota: o ciclo ainda não tem nota lançada para o grupo. "
+            "Marque um ou mais: cada aluno marcado indica um colega."
+        )
+        for p in pendentes:
+            _escolha_empate(id_j, p, [])
+    if decididos:
+        with st.expander(f"Empates já decididos ({len(decididos)}): marcar outro empatado ou trocar"):
+            st.caption(
+                "Pode marcar mais de um empatado: cada um indica um colega. "
+                "Quem já confirmou a indicação não pode ser desmarcado."
             )
-        with c2:
-            if st.button("Confirmar", key=f"ind_grp_emp_ok_{chave}", width="stretch"):
-                erro = marcar_desempate_coord(id_j, opcoes[escolha])
-                if erro:
-                    st.error(erro)
-                else:
-                    st.rerun()
+            for p in decididos:
+                _escolha_empate(id_j, p, p["atuais"])
 
 
 def _render_quadro(quadro: pd.DataFrame, id_j: str):
@@ -399,7 +423,7 @@ def render(usuario: dict):
     st.header("Indicação de grupos")
     st.caption(
         "Ao fim do ciclo, o melhor aluno de cada grupo indica um colega da turma para o próximo "
-        "agrupamento. O indicado não vê quem o escolheu."
+        "agrupamento (em empate, a coordenação pode escolher mais de um). O indicado não vê quem o escolheu."
     )
 
     df_disc = ler_aba("Disciplinas")
@@ -441,12 +465,12 @@ def render(usuario: dict):
         return
     ind = carregar_indicacoes(id_j)
     status = str(janela.get("Status", "")).strip().lower()
-    quadro, pendentes = _montar_quadro(rank, ind, status)
+    quadro, pendentes, decididos = _montar_quadro(rank, ind, status)
 
     _render_passos(janela, quadro, pendentes)
     if id_j != str(rodadas_ciclo.iloc[0]["ID_Janela"]).strip():
         st.caption("Exibindo uma rodada anterior deste ciclo (troque em Opções avançadas).")
-    _render_pendentes(id_j, pendentes)
+    _render_pendentes(id_j, pendentes, decididos)
     _render_acao(usuario, janela, pendentes)
 
     st.subheader("Grupos")

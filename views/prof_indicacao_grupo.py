@@ -13,6 +13,7 @@ from domain.indicacao_grupo import (
     STATUS_ABERTA,
     STATUS_FECHADA,
     abrir_janela,
+    alunos_para_exclusao,
     atualizar_excluidos,
     calcular_ranking_ciclo,
     candidatos_desempate_grupo,
@@ -20,6 +21,7 @@ from domain.indicacao_grupo import (
     carregar_janelas,
     carregar_ranking,
     criar_janela_rascunho,
+    emails_excluidos_lista,
     fechar_janela,
     marcar_desempate_coord,
     recalcular_posicoes_exibicao,
@@ -176,16 +178,18 @@ def _render_passos(janela: pd.Series | None, quadro: pd.DataFrame, pendentes: li
         _passo(c4, total > 0 and indicaram == total, "4. Indicações", f"{indicaram} de {total} grupo(s)" if total else "—")
 
 
-def _calcular(usuario: dict, id_disc: str, id_ciclo: str, nome_ciclo: str, rotulo: str, key: str, tipo: str):
+def _calcular(
+    usuario: dict, id_disc: str, id_ciclo: str, nome_ciclo: str, rotulo: str, key: str, tipo: str, excluidos: set[str]
+):
     if not st.button(rotulo, type=tipo, key=key):
         return
     with st.spinner("Calculando o ranking… pode levar alguns minutos."):
-        ranking = calcular_ranking_ciclo(id_disc, id_ciclo)
+        ranking = calcular_ranking_ciclo(id_disc, id_ciclo, excluidos)
         if ranking.empty:
             st.error("Nenhum aluno com grupo encontrado para ranquear.")
             return
         id_j = criar_janela_rascunho(
-            id_disc, id_ciclo, nome_ciclo, usuario.get("email", ""), usuario.get("nome", ""), ranking
+            id_disc, id_ciclo, nome_ciclo, usuario.get("email", ""), usuario.get("nome", ""), ranking, excluidos
         )
     registrar_log(
         usuario.get("email", ""),
@@ -277,14 +281,14 @@ def _render_pendentes(id_j: str, pendentes: list[dict], decididos: list[dict]):
         st.caption(
             "Empate: alunos iguais em nota do ciclo, % de dailies e % de aulas. "
             "Sem nota: o ciclo ainda não tem nota lançada para o grupo. "
-            "Marque um ou mais: cada aluno marcado indica um colega."
+            "Marque um ou mais: cada aluno marcado indica um colega da disciplina, de qualquer grupo ou sala."
         )
         for p in pendentes:
             _escolha_empate(id_j, p, [])
     if decididos:
         with st.expander(f"Empates já decididos ({len(decididos)}): marcar outro empatado ou trocar"):
             st.caption(
-                "Pode marcar mais de um empatado: cada um indica um colega. "
+                "Pode marcar mais de um empatado: cada um indica um colega da disciplina, de qualquer grupo ou sala. "
                 "Quem já confirmou a indicação não pode ser desmarcado."
             )
             for p in decididos:
@@ -311,19 +315,100 @@ def _render_quadro(quadro: pd.DataFrame, id_j: str):
     st.dataframe(mostrar, width="stretch", hide_index=True)
 
 
-def _opcoes_exclusao(id_disc: str) -> dict[str, str]:
-    alunos = ler_aba("Entrancia_Turma")
+def _ordenar(valores) -> list[str]:
+    return sorted({v for v in valores}, key=chave_ordenacao_texto)
+
+
+def _render_exclusoes(usuario: dict, id_disc: str, janela: pd.Series):
+    id_j = str(janela.get("ID_Janela", "")).strip()
+    salvos = emails_excluidos_lista(janela.get("Emails_Excluidos", ""))
+    st.markdown("**Alunos fora do ranking e da lista de escolha**")
+    st.caption(
+        "Marque quem não participa desta rodada (ex.: grupos D e E, desistentes). Excluídos não entram no "
+        "ranking, não podem ser o melhor do grupo e não podem ser indicados. Vale só para esta rodada; "
+        "ao recalcular o ranking, a nova rodada começa com a mesma lista."
+    )
+    alunos = alunos_para_exclusao(id_disc)
     if alunos.empty:
-        return {}
-    alunos = alunos[alunos["ID_Disciplina"].map(normalizar_id) == normalizar_id(id_disc)].copy()
-    alunos["Email_Limpo"] = alunos["Email_Pessoal"].astype(str).str.strip().str.lower()
-    alunos = alunos.drop_duplicates("Email_Limpo")
-    alunos = alunos.sort_values("Nome_Completo", key=lambda s: s.map(chave_ordenacao_texto), kind="mergesort")
-    return {
-        f"{str(r.get('Nome_Completo', '')).strip()} <{r['Email_Limpo']}>": r["Email_Limpo"]
-        for _, r in alunos.iterrows()
-        if r["Email_Limpo"]
-    }
+        st.caption("Nenhum aluno com grupo nesta disciplina.")
+        return
+    alunos = alunos.assign(
+        _t=alunos["Turma"].map(chave_ordenacao_texto),
+        _s=alunos["Sala"].map(chave_ordenacao_texto),
+        _g=alunos["Grupo"].map(chave_ordenacao_texto),
+        _n=alunos["Nome"].map(chave_ordenacao_texto),
+    ).sort_values(["_t", "_s", "_g", "_n"], kind="mergesort").drop(columns=["_t", "_s", "_g", "_n"])
+
+    k_sel, k_ver = f"ind_grp_exc_sel_{id_j}", f"ind_grp_exc_ver_{id_j}"
+    if k_sel not in st.session_state:
+        st.session_state[k_sel] = set(salvos)
+    marcados: set[str] = st.session_state[k_sel]
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        turmas = st.multiselect("Turma", _ordenar(alunos["Turma"]), key=f"ind_grp_exc_t_{id_j}", placeholder="Todas")
+    with c2:
+        salas = st.multiselect("Sala", _ordenar(alunos["Sala"]), key=f"ind_grp_exc_s_{id_j}", placeholder="Todas")
+    with c3:
+        grupos = st.multiselect("Grupo", _ordenar(alunos["Grupo"]), key=f"ind_grp_exc_g_{id_j}", placeholder="Todos")
+    vis = alunos
+    if turmas:
+        vis = vis[vis["Turma"].isin(turmas)]
+    if salas:
+        vis = vis[vis["Sala"].isin(salas)]
+    if grupos:
+        vis = vis[vis["Grupo"].isin(grupos)]
+    emails_vis = set(vis["E-mail"])
+
+    b1, b2, _ = st.columns([1, 1, 2])
+    with b1:
+        if st.button(f"Marcar os {len(vis)} filtrados", key=f"ind_grp_exc_all_{id_j}", width="stretch"):
+            marcados |= emails_vis
+            st.session_state[k_ver] = st.session_state.get(k_ver, 0) + 1
+            st.rerun()
+    with b2:
+        if st.button(f"Desmarcar os {len(vis)} filtrados", key=f"ind_grp_exc_none_{id_j}", width="stretch"):
+            marcados -= emails_vis
+            st.session_state[k_ver] = st.session_state.get(k_ver, 0) + 1
+            st.rerun()
+
+    tabela = vis.assign(Excluir=vis["E-mail"].isin(marcados))[["Excluir", "Nome", "Turma", "Sala", "Grupo", "E-mail"]]
+    chave_editor = f"ind_grp_exc_ed_{id_j}_{st.session_state.get(k_ver, 0)}_" + "|".join(
+        ",".join(f) for f in (turmas, salas, grupos)
+    )
+    editado = st.data_editor(
+        tabela,
+        key=chave_editor,
+        hide_index=True,
+        width="stretch",
+        height=min(38 + 35 * len(tabela), 420),
+        disabled=["Nome", "Turma", "Sala", "Grupo", "E-mail"],
+        column_config={"Excluir": st.column_config.CheckboxColumn("Excluir", width="small")},
+    )
+    marcados -= emails_vis
+    marcados |= set(editado.loc[editado["Excluir"], "E-mail"])
+
+    fora_da_lista = salvos - set(alunos["E-mail"])
+    entram, saem = len(marcados - salvos), len(salvos - marcados)
+    resumo = f"{len(marcados)} aluno(s) marcado(s) para excluir"
+    if entram or saem:
+        resumo += f" · alterações não salvas: {entram} a excluir, {saem} a voltar"
+    if fora_da_lista:
+        resumo += f" · {len(fora_da_lista)} já excluído(s) sem grupo na turma (continuam excluídos)"
+    st.caption(resumo)
+    if st.button("Salvar exclusões", type="primary", key=f"ind_grp_exc_save_{id_j}", disabled=not (entram or saem)):
+        with st.spinner("Salvando e refazendo o melhor de cada grupo…"):
+            erro = atualizar_excluidos(id_j, marcados)
+        if erro:
+            st.error(erro)
+            return
+        registrar_log(
+            usuario.get("email", ""),
+            usuario.get("nome", ""),
+            f"Exclusões indicação grupo janela={id_j} total={len(marcados)} (+{entram} -{saem})",
+        )
+        st.session_state.pop(k_sel, None)
+        st.rerun()
 
 
 def _render_avancado(
@@ -337,24 +422,9 @@ def _render_avancado(
     tem_indicacoes: bool,
 ):
     id_j = str(janela.get("ID_Janela", "")).strip()
+    excluidos = emails_excluidos_lista(janela.get("Emails_Excluidos", ""))
     with st.expander("Opções avançadas"):
-        st.markdown("**Excluir alunos da lista de escolha**")
-        st.caption("Ex.: desistentes que ainda aparecem na turma. Eles não podem ser indicados.")
-        opcoes = _opcoes_exclusao(id_disc)
-        atuais = {
-            e.strip().lower() for e in str(janela.get("Emails_Excluidos", "")).replace(";", ",").split(",") if e.strip()
-        }
-        sel = st.multiselect(
-            "Alunos excluídos",
-            list(opcoes.keys()),
-            default=[lab for lab, em in opcoes.items() if em in atuais],
-            key=f"ind_grp_exc_{id_j}",
-            label_visibility="collapsed",
-        )
-        if st.button("Salvar exclusões", key=f"ind_grp_exc_save_{id_j}"):
-            atualizar_excluidos(id_j, [opcoes[s] for s in sel])
-            st.success("Exclusões salvas.")
-            st.rerun()
+        _render_exclusoes(usuario, id_disc, janela)
 
         st.divider()
         st.markdown("**Ranking completo do ciclo**")
@@ -387,7 +457,10 @@ def _render_avancado(
                 "% aulas": st.column_config.NumberColumn(format="%.0f%%"),
             },
         )
-        st.caption("Critérios: nota do ciclo, depois % de dailies, depois % de aulas. Empates repetem a posição.")
+        legenda = "Critérios: nota do ciclo, depois % de dailies, depois % de aulas. Empates repetem a posição."
+        if excluidos:
+            legenda += f" Excluídos não aparecem ({len(excluidos)})."
+        st.caption(legenda)
 
         st.divider()
         st.markdown("**Recalcular o ranking**")
@@ -400,7 +473,9 @@ def _render_avancado(
             st.warning("Esta rodada já tem indicações confirmadas. Elas ficam na rodada antiga e não passam para a nova.")
             ok = st.checkbox("Entendi, quero recalcular mesmo assim", key=f"ind_grp_recalc_ok_{id_j}")
         if ok:
-            _calcular(usuario, id_disc, id_ciclo, nome_ciclo, "Recalcular ranking", f"ind_grp_recalc_{id_j}", "secondary")
+            _calcular(
+                usuario, id_disc, id_ciclo, nome_ciclo, "Recalcular ranking", f"ind_grp_recalc_{id_j}", "secondary", excluidos
+            )
 
         if len(rodadas_ciclo) > 1:
             st.divider()
@@ -422,8 +497,9 @@ def _render_avancado(
 def render(usuario: dict):
     st.header("Indicação de grupos")
     st.caption(
-        "Ao fim do ciclo, o melhor aluno de cada grupo indica um colega da turma para o próximo "
-        "agrupamento (em empate, a coordenação pode escolher mais de um). O indicado não vê quem o escolheu."
+        "Ao fim do ciclo, o melhor aluno de cada grupo indica um colega da disciplina, de qualquer grupo ou "
+        "sala, para o próximo agrupamento (em empate, a coordenação pode escolher mais de um). "
+        "O indicado não vê quem o escolheu."
     )
 
     df_disc = ler_aba("Disciplinas")
@@ -450,7 +526,12 @@ def render(usuario: dict):
             f"Primeiro passo: calcular o ranking de **{nome_ciclo}**. O sistema usa a nota do ciclo e, "
             "no empate, % de dailies e % de aulas para achar o melhor de cada grupo."
         )
-        _calcular(usuario, id_disc, id_ciclo, nome_ciclo, "Calcular ranking", f"ind_grp_calc_{id_ciclo}", "primary")
+        herdados = emails_excluidos_lista(rodadas.iloc[0].get("Emails_Excluidos", "")) if not rodadas.empty else set()
+        if herdados:
+            st.caption(f"{len(herdados)} aluno(s) excluído(s) da rodada anterior continuam fora (dá para mudar depois).")
+        _calcular(
+            usuario, id_disc, id_ciclo, nome_ciclo, "Calcular ranking", f"ind_grp_calc_{id_ciclo}", "primary", herdados
+        )
         return
 
     sel = st.session_state.get(f"ind_grp_rodada_{id_disc}_{id_ciclo}")
@@ -458,18 +539,31 @@ def render(usuario: dict):
     janela = match.iloc[0] if not match.empty else rodadas_ciclo.iloc[0]
     id_j = str(janela["ID_Janela"]).strip()
 
+    excluidos = emails_excluidos_lista(janela.get("Emails_Excluidos", ""))
     rank = carregar_ranking(id_j)
     if rank.empty:
         st.warning("O ranking desta rodada está vazio. Recalcule em Opções avançadas.")
-        _calcular(usuario, id_disc, id_ciclo, nome_ciclo, "Recalcular ranking", f"ind_grp_recalc_vazio_{id_j}", "primary")
+        _calcular(
+            usuario, id_disc, id_ciclo, nome_ciclo, "Recalcular ranking", f"ind_grp_recalc_vazio_{id_j}", "primary", excluidos
+        )
         return
+    eh_excluido = rank["Email_Aluno"].astype(str).str.strip().str.lower().isin(excluidos)
     ind = carregar_indicacoes(id_j)
     status = str(janela.get("Status", "")).strip().lower()
-    quadro, pendentes, decididos = _montar_quadro(rank, ind, status)
+    rank_ativo = rank[~eh_excluido]
+    quadro, pendentes, decididos = _montar_quadro(rank_ativo, ind, status)
 
     _render_passos(janela, quadro, pendentes)
     if id_j != str(rodadas_ciclo.iloc[0]["ID_Janela"]).strip():
         st.caption("Exibindo uma rodada anterior deste ciclo (troque em Opções avançadas).")
+    if (eh_excluido & rank["Vencedor"].astype(str).str.strip().str.lower().isin(_SIM)).any():
+        st.warning("Há aluno excluído marcado como melhor do grupo (exclusão feita antes desta versão).")
+        if st.button("Refazer o melhor de cada grupo sem os excluídos", key=f"ind_grp_reaplicar_{id_j}"):
+            erro = atualizar_excluidos(id_j, excluidos)
+            if erro:
+                st.error(erro)
+            else:
+                st.rerun()
     _render_pendentes(id_j, pendentes, decididos)
     _render_acao(usuario, janela, pendentes)
 
@@ -477,4 +571,4 @@ def render(usuario: dict):
     _render_quadro(quadro, id_j)
 
     tem_ind = (not ind.empty) and (ind["Status"].astype(str).str.strip().str.lower() == "confirmado").any()
-    _render_avancado(usuario, id_disc, id_ciclo, nome_ciclo, janela, rodadas_ciclo, rank, bool(tem_ind))
+    _render_avancado(usuario, id_disc, id_ciclo, nome_ciclo, janela, rodadas_ciclo, rank_ativo, bool(tem_ind))

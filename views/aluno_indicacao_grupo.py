@@ -49,7 +49,7 @@ def render(usuario: dict):
 
             pool = pool_escolha(id_j, email)
             if pool.empty:
-                st.warning("Não há colegas disponíveis para indicação nesta oferta.")
+                st.warning("Não há colegas disponíveis para indicação nesta disciplina.")
                 continue
 
             opcoes = {
@@ -62,7 +62,7 @@ def render(usuario: dict):
                 for _, r in pool.iterrows()
             }
             escolha_lab = st.selectbox(
-                "Escolha um colega da oferta:",
+                "Escolha um colega da disciplina (de qualquer sala ou grupo):",
                 list(opcoes.keys()),
                 key=f"aluno_ind_sel_{id_j}",
             )

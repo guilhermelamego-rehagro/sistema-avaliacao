@@ -54,9 +54,28 @@ def _parse_data(valor) -> pd.Timestamp | None:
     return pd.Timestamp(ts).normalize()
 
 
-def _emails_excluidos_lista(texto: str) -> set[str]:
+_SIM = {"sim", "s", "true", "1"}
+
+
+def _sim(serie: pd.Series) -> pd.Series:
+    return serie.astype(str).str.strip().str.lower().isin(_SIM)
+
+
+def emails_excluidos_lista(texto: str) -> set[str]:
     partes = str(texto or "").replace(";", ",").replace("\n", ",").split(",")
     return {_email_limpo(p) for p in partes if _email_limpo(p)}
+
+
+def excluidos_da_janela(id_janela: str) -> set[str]:
+    janelas = carregar_janelas()
+    j = janelas[janelas["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()]
+    return emails_excluidos_lista(j.iloc[0].get("Emails_Excluidos", "")) if not j.empty else set()
+
+
+def _confirmadas(ind: pd.DataFrame) -> pd.DataFrame:
+    if ind is None or ind.empty:
+        return pd.DataFrame(columns=ABAS_AVALIACAO[ABA_INDICACOES])
+    return ind[ind["Status"].astype(str).str.strip().str.lower() == "confirmado"]
 
 
 def _serializar_excluidos(emails: list[str] | set[str]) -> str:
@@ -135,6 +154,31 @@ def _alunos_ativos_disciplina(id_disciplina: str) -> pd.DataFrame:
     return alunos.drop_duplicates(subset=["Email_Limpo"], keep="first").reset_index(drop=True)
 
 
+def alunos_para_exclusao(id_disciplina: str) -> pd.DataFrame:
+    """Alunos que entram no ranking e na lista de escolha: E-mail, Nome, Turma, Sala, Grupo."""
+    from domain.notas import _anexar_turma_base_alunos
+
+    alunos = _alunos_ativos_disciplina(id_disciplina)
+    if alunos.empty:
+        return pd.DataFrame(columns=["E-mail", "Nome", "Turma", "Sala", "Grupo"])
+    alunos = _anexar_turma_base_alunos(alunos)
+
+    def _txt(col: str) -> pd.Series:
+        if col not in alunos.columns:
+            return pd.Series([""] * len(alunos), index=alunos.index)
+        return alunos[col].astype(str).str.strip().replace({"nan": "", "None": ""})
+
+    return pd.DataFrame(
+        {
+            "E-mail": alunos["Email_Limpo"],
+            "Nome": _txt("Nome_Completo"),
+            "Turma": _txt("Turma_Ingresso"),
+            "Sala": _txt("Sala"),
+            "Grupo": _txt("Grupo"),
+        }
+    ).reset_index(drop=True)
+
+
 def _mapa_pct(resumo: pd.DataFrame) -> dict[str, float]:
     if resumo is None or resumo.empty:
         return {}
@@ -183,10 +227,11 @@ def _nota_componente_ciclo(email: str, id_disciplina: str, grupo: str, sala: str
     return None
 
 
-def calcular_ranking_ciclo(id_disciplina: str, id_ciclo: str) -> pd.DataFrame:
+def calcular_ranking_ciclo(id_disciplina: str, id_ciclo: str, excluidos: set[str] | None = None) -> pd.DataFrame:
     """
     Ranking por grupo: nota do ciclo (maior), depois % dailies, depois % aulas.
     Empates após os três critérios ficam com Vencedor=Não até desempate da coordenação.
+    Excluídos ficam no snapshot (para poder voltar), mas sem posição e sem concorrer.
     """
     id_d = normalizar_id(id_disciplina)
     id_c = str(id_ciclo).strip()
@@ -231,62 +276,44 @@ def calcular_ranking_ciclo(id_disciplina: str, id_ciclo: str) -> pd.DataFrame:
     df = pd.DataFrame(linhas)
     if df.empty:
         return df
+    return definir_vencedores(df, excluidos or set()).reset_index(drop=True)
 
-    def _num(serie: pd.Series) -> pd.Series:
-        return pd.to_numeric(serie, errors="coerce")
 
-    df["_nota"] = _num(df["Nota_Ciclo"]).fillna(-1)
-    df["_dailies"] = _num(df["Pct_Dailies"]).fillna(-1)
-    df["_aulas"] = _num(df["Pct_Aulas"]).fillna(-1)
+def definir_vencedores(
+    rank: pd.DataFrame, excluidos: set[str], ja_indicaram: set[str] | None = None
+) -> pd.DataFrame:
+    """
+    Posição e melhor de cada grupo sem os excluídos. Único 1º com nota vence sozinho; em empate,
+    mantém a escolha da coordenação enquanto os escolhidos seguirem empatados no topo.
+    Quem já confirmou indicação nunca perde a marca de melhor do grupo.
+    """
+    out = rank.copy()
+    out["Posicao_Grupo"] = out["Posicao_Grupo"].astype(object)
+    ja_indicaram = ja_indicaram or set()
+    emails = out["Email_Aluno"].map(_email_limpo)
+    exc = emails.isin(excluidos)
+    out.loc[exc, ["Posicao_Grupo", "Vencedor", "Desempate_Coord"]] = ["", "Não", "Não"]
+    ativos = out[~exc]
+    if ativos.empty:
+        return out
+    out.loc[~exc, "Posicao_Grupo"] = recalcular_posicoes_exibicao(ativos)["Posicao_Grupo"]
 
-    posicoes: list[int] = [0] * len(df)
-    vencedores: list[str] = ["Não"] * len(df)
-
-    # Ranking por sala+grupo; empates nos 3 critérios compartilham a mesma posição.
-    chaves_grupo = ["Sala", "Grupo"] if "Sala" in df.columns else ["Grupo"]
-    for _, idx in df.groupby(chaves_grupo, sort=False, dropna=False).groups.items():
-        bloco_idx = list(idx)
-        bloco = df.loc[bloco_idx].sort_values(
-            by=["_nota", "_dailies", "_aulas", "Nome_Aluno"],
-            ascending=[False, False, False, True],
-            kind="mergesort",
-        )
-        prev_key = None
-        pos_atual = 0
-        for ordem, i in enumerate(bloco.index):
-            key = (
-                float(bloco.at[i, "_nota"]),
-                float(bloco.at[i, "_dailies"]),
-                float(bloco.at[i, "_aulas"]),
-            )
-            if prev_key is None or key != prev_key:
-                pos_atual = ordem + 1  # ranking de competição: 1,1,3…
-                prev_key = key
-            posicoes[df.index.get_loc(i)] = pos_atual
-
-        # Vencedor só se houver um único 1º (sem empate nos 3 critérios).
-        primeiro = bloco.iloc[0]
-        top_key = (
-            float(primeiro["_nota"]),
-            float(primeiro["_dailies"]),
-            float(primeiro["_aulas"]),
-        )
-        empatados_topo = [
-            i
-            for i in bloco.index
-            if (
-                float(bloco.at[i, "_nota"]),
-                float(bloco.at[i, "_dailies"]),
-                float(bloco.at[i, "_aulas"]),
-            )
-            == top_key
-        ]
-        if len(empatados_topo) == 1 and float(primeiro["_nota"]) >= 0:
-            vencedores[df.index.get_loc(empatados_topo[0])] = "Sim"
-
-    df["Posicao_Grupo"] = posicoes
-    df["Vencedor"] = vencedores
-    return df.drop(columns=["_nota", "_dailies", "_aulas"]).reset_index(drop=True)
+    chaves = ["Sala", "Grupo"] if "Sala" in out.columns else ["Grupo"]
+    for _, bloco in ativos.groupby(chaves, sort=False, dropna=False):
+        em_bloco = bloco["Email_Aluno"].map(_email_limpo)
+        topo = candidatos_desempate_grupo(bloco)
+        topo_em = set(topo["Email_Aluno"].map(_email_limpo))
+        coord = set(em_bloco[_sim(bloco["Vencedor"]) & _sim(bloco["Desempate_Coord"])]) & topo_em
+        if coord:
+            vencem = coord
+        elif len(topo) == 1 and pd.notna(pd.to_numeric(topo.iloc[0].get("Nota_Ciclo"), errors="coerce")):
+            vencem = topo_em
+        else:
+            vencem = set()
+        vencem |= set(em_bloco[_sim(bloco["Vencedor"])]) & ja_indicaram
+        out.loc[bloco.index, "Vencedor"] = em_bloco.isin(vencem).map({True: "Sim", False: "Não"})
+        out.loc[bloco.index, "Desempate_Coord"] = em_bloco.isin(coord).map({True: "Sim", False: "Não"})
+    return out
 
 
 def candidatos_desempate_grupo(bloco: pd.DataFrame) -> pd.DataFrame:
@@ -348,8 +375,9 @@ def criar_janela_rascunho(
     email_responsavel: str,
     nome_responsavel: str,
     ranking: pd.DataFrame,
+    excluidos: set[str] | None = None,
 ) -> str:
-    """Cria janela em rascunho e grava o snapshot do ranking."""
+    """Cria janela em rascunho e grava o snapshot do ranking (excluídos herdados da rodada anterior)."""
     _garantir_abas()
     id_janela = str(uuid4())
     id_d = normalizar_id(id_disciplina)
@@ -380,7 +408,7 @@ def criar_janela_rascunho(
             "",
             "",
             STATUS_RASCUNHO,
-            "",
+            _serializar_excluidos(excluidos or set()),
             _email_limpo(email_responsavel),
             str(nome_responsavel or "").strip(),
             agora,
@@ -390,16 +418,45 @@ def criar_janela_rascunho(
     return id_janela
 
 
-def atualizar_excluidos(id_janela: str, emails: list[str]):
+def atualizar_excluidos(id_janela: str, emails: list[str] | set[str]) -> str | None:
+    """
+    Grava os excluídos da rodada e refaz posições e melhores de cada grupo sem eles.
+    Recusa excluir quem já indicou ou já foi indicado nesta rodada (nada é desfeito em silêncio).
+    """
     _garantir_abas()
     df = carregar_janelas()
-    if df.empty:
-        return
-    mask = df["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()
-    if not mask.any():
-        return
-    df.loc[mask, "Emails_Excluidos"] = _serializar_excluidos(emails)
+    mask = df["ID_Janela"].astype(str).str.strip() == str(id_janela).strip() if not df.empty else None
+    if mask is None or not mask.any():
+        return "Rodada não encontrada."
+    novos = {_email_limpo(e) for e in emails if _email_limpo(e)}
+    adicionados = novos - emails_excluidos_lista(df.loc[mask].iloc[0].get("Emails_Excluidos", ""))
+
+    conf = _confirmadas(carregar_indicacoes(id_janela))
+    ja_indicaram = set(conf["Email_Vencedor"].map(_email_limpo))
+    problemas = []
+    for _, r in conf.iterrows():
+        if _email_limpo(r["Email_Vencedor"]) in adicionados:
+            problemas.append(f"{str(r.get('Nome_Vencedor', '')).strip() or r['Email_Vencedor']} (já indicou um colega)")
+        if _email_limpo(r["Email_Escolhido"]) in adicionados:
+            problemas.append(f"{str(r.get('Nome_Escolhido', '')).strip() or r['Email_Escolhido']} (já foi indicado)")
+    if problemas:
+        return (
+            "Nada foi salvo. Não dá para excluir quem já participou da indicação desta rodada: "
+            + "; ".join(problemas)
+            + ". Desmarque esses alunos e salve de novo."
+        )
+
+    df.loc[mask, "Emails_Excluidos"] = _serializar_excluidos(novos)
     salvar_aba(ABA_JANELAS, df, ABAS_AVALIACAO[ABA_JANELAS])
+
+    full = carregar_ranking()
+    mask_r = full["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()
+    if mask_r.any():
+        refeito = definir_vencedores(full[mask_r], novos, ja_indicaram)
+        full = full.astype(object)
+        full.loc[mask_r, refeito.columns] = refeito
+        salvar_aba(ABA_RANKING, full, ABAS_AVALIACAO[ABA_RANKING])
+    return None
 
 
 def marcar_desempate_coord(id_janela: str, emails_vencedores: str | list[str]) -> str | None:
@@ -416,6 +473,7 @@ def marcar_desempate_coord(id_janela: str, emails_vencedores: str | list[str]) -
     df = carregar_ranking(id_janela)
     if df.empty:
         return "Ranking da janela não encontrado."
+    df = df[~df["Email_Aluno"].map(_email_limpo).isin(excluidos_da_janela(id_janela))]
     alvo = df[df["Email_Aluno"].map(_email_limpo).isin(escolhidos)]
     if alvo["Email_Aluno"].map(_email_limpo).nunique() != len(escolhidos):
         return "Aluno não está no ranking desta janela."
@@ -443,7 +501,7 @@ def marcar_desempate_coord(id_janela: str, emails_vencedores: str | list[str]) -
         nomes = ", ".join(presos["Nome_Aluno"].astype(str).str.strip())
         return f"{nomes} já indicou um colega e não pode ser desmarcado."
 
-    full = carregar_ranking()
+    full = carregar_ranking().astype(object)
     mask_janela = full["ID_Janela"].astype(str).str.strip() == str(id_janela).strip()
     mask_grupo = (full["Grupo"].astype(str).str.strip() == grupo) & (
         full["Sala"].astype(str).str.strip() == sala
@@ -470,7 +528,7 @@ def abrir_janela(id_janela: str, data_inicio: str, data_fim: str) -> str | None:
     rank = carregar_ranking(id_janela)
     if rank.empty:
         return "Gere o ranking antes de abrir a janela."
-    ven = rank[rank["Vencedor"].astype(str).str.strip().str.lower().isin({"sim", "s", "true", "1"})]
+    ven = rank[_sim(rank["Vencedor"]) & ~rank["Email_Aluno"].map(_email_limpo).isin(excluidos_da_janela(id_janela))]
     if ven.empty:
         return "Não há vencedores definidos. Resolva empates antes de abrir."
 
@@ -531,7 +589,7 @@ def janelas_abertas_para_vencedor(email: str) -> pd.DataFrame:
     linhas = []
     for _, j in vigentes.iterrows():
         id_j = str(j.get("ID_Janela", "")).strip()
-        if id_j in ja_indicou:
+        if id_j in ja_indicou or email_l in emails_excluidos_lista(j.get("Emails_Excluidos", "")):
             continue
         r = rank[
             (rank["ID_Janela"].astype(str).str.strip() == id_j)
@@ -558,7 +616,7 @@ def pool_escolha(id_janela: str, email_vencedor: str) -> pd.DataFrame:
         return pd.DataFrame()
     row = j.iloc[0]
     id_d = normalizar_id(row.get("ID_Disciplina", ""))
-    excluidos = _emails_excluidos_lista(row.get("Emails_Excluidos", ""))
+    excluidos = emails_excluidos_lista(row.get("Emails_Excluidos", ""))
     excluidos.add(_email_limpo(email_vencedor))
 
     ind = carregar_indicacoes(id_janela)

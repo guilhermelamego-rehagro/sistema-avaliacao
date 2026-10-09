@@ -117,8 +117,7 @@ def _render_resultado_final(email: str, id_disc: str, nota_final: float | None) 
     else:
         st.info("Ainda há componentes sem nota; a situação final aparece quando todos forem lançados.")
     st.caption(
-        "A nota final soma os componentes com os pesos da disciplina (componente sem nota conta zero) e é "
-        "arredondada para o número inteiro mais próximo (ex.: 69,5 vira 70). Aprovação: nota a partir de 70 e "
+        "A nota final soma os componentes com os pesos da disciplina. Aprovação: nota a partir de 70 e "
         "presença a partir de 75%; recuperação: nota de 40 a 69."
     )
 

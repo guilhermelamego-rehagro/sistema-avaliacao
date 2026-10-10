@@ -7,6 +7,7 @@ import re
 
 from auth.supabase_auth import (
     SENHA_MINIMA,
+    ambiente_app,
     fazer_login,
     fazer_logout,
     processar_retorno_recuperacao,
@@ -228,6 +229,33 @@ if not st.session_state["usuario_logado"]:
                         st.error(
                             msg_recup or "Não foi possível solicitar a redefinição."
                         )
+                    elif tipo_recup == "limite_envio":
+                        if email_log:
+                            registrar_log(
+                                email_log,
+                                email_log,
+                                "Recuperação de senha bloqueada por limite de envio",
+                                dedupe=False,
+                            )
+                        st.error(
+                            msg_recup or "Muitas tentativas. Aguarde e tente de novo."
+                        )
+                    elif tipo_recup == "falha_envio":
+                        if email_log:
+                            registrar_log(
+                                email_log,
+                                email_log,
+                                "Falha ao enviar e-mail de recuperação de senha"
+                                f" ({msg_recup or 'erro desconhecido'})",
+                                dedupe=False,
+                            )
+                        st.error(
+                            "Não conseguimos enviar o e-mail de recuperação agora. "
+                            "Procure a equipe de professores Rehagro para "
+                            "redefinir sua senha."
+                        )
+                        if ambiente_app() != "producao" and msg_recup:
+                            st.caption(f"Detalhe (só no ambiente de teste): {msg_recup}")
                     elif tipo_recup == "senha_temporaria":
                         if email_log:
                             registrar_log(

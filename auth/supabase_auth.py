@@ -196,6 +196,31 @@ def _buscar_perfil_por_email(email: str) -> dict | None:
     return None
 
 
+_TRECHOS_LIMITE_ENVIO = (
+    "rate",
+    "429",
+    "over_email",
+    "email rate",
+    "too many",
+    "exceeded",
+)
+
+
+def _resumo_erro_envio(exc: Exception, email: str) -> str:
+    """Tipo + código + mensagem curta do erro, sem o e-mail digitado."""
+    partes = [type(exc).__name__]
+    codigo = getattr(exc, "code", None) or getattr(exc, "status", None)
+    if codigo:
+        partes.append(str(codigo))
+    msg = " ".join(str(exc).split())
+    if email:
+        msg = msg.replace(email, "[e-mail]")
+    if len(msg) > 120:
+        msg = msg[:117] + "..."
+    resumo = " ".join(partes)
+    return f"{resumo}: {msg}" if msg else resumo
+
+
 def solicitar_recuperacao_senha(email: str) -> tuple[str, str | None]:
     """
     Solicita redefinição de senha.
@@ -203,6 +228,8 @@ def solicitar_recuperacao_senha(email: str) -> tuple[str, str | None]:
     Retorna (tipo, mensagem):
       - ("email_enviado", None) — disparou o e-mail do Supabase
       - ("senha_temporaria", senha) — ainda deve trocar senha; não envia e-mail
+      - ("limite_envio", msg) — Supabase recusou por excesso de tentativas
+      - ("falha_envio", resumo_do_erro) — Supabase não conseguiu enviar (SMTP etc.)
       - ("erro", msg) — falha / validação
     """
     email = email.strip().lower()
@@ -232,33 +259,17 @@ def solicitar_recuperacao_senha(email: str) -> tuple[str, str | None]:
             {"redirect_to": url_redirect_recuperacao()},
         )
     except Exception as exc:
-        msg = str(exc).lower()
+        msg = f"{exc} {getattr(exc, 'code', '') or ''} {getattr(exc, 'status', '') or ''}"
         # Cota do e-mail embutido do Supabase é baixa; após vários testes some o envio.
-        if any(
-            trecho in msg
-            for trecho in (
-                "rate",
-                "429",
-                "over_email",
-                "email rate",
-                "too many",
-                "exceeded",
-            )
-        ):
+        if any(trecho in msg.lower() for trecho in _TRECHOS_LIMITE_ENVIO):
             return (
-                "erro",
+                "limite_envio",
                 "O Supabase limitou o envio de e-mails por excesso de tentativas. "
                 "Aguarde alguns minutos (às vezes 1h) e tente de novo, "
                 "ou configure SMTP próprio no painel Auth → Emails.",
             )
-        if ambiente_app() != "producao":
-            return (
-                "erro",
-                "Não foi possível solicitar a redefinição. "
-                f"Detalhe (só no ambiente de teste): {exc}",
-            )
-        # Em produção: mensagem genérica (não revelar se o e-mail existe).
-        return "email_enviado", None
+        # E-mail não cadastrado não gera erro no Supabase; aqui o envio falhou de fato.
+        return "falha_envio", _resumo_erro_envio(exc, email)
     return "email_enviado", None
 
 

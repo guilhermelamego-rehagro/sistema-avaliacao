@@ -13,6 +13,7 @@ _ACOES_SEM_DEDUPE = frozenset(
         "Falha de login",
         "Solicitou recuperação de senha",
         "Solicitou recuperação (senha temporária)",
+        "Recuperação de senha bloqueada por limite de envio",
     }
 )
 
